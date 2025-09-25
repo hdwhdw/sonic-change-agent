@@ -5,6 +5,11 @@ import (
 	"fmt"
 	"time"
 
+	"github.com/openconfig/gnoi/os"
+	"github.com/openconfig/gnoi/system"
+	"github.com/openconfig/gnoi/common"
+	"google.golang.org/grpc"
+	"google.golang.org/grpc/credentials/insecure"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/fields"
@@ -193,28 +198,255 @@ func (c *Controller) onNetworkDeviceDelete(obj interface{}) {
 	klog.InfoS("🔴 NetworkDevice DELETED", "device", deviceName)
 }
 
-// handlePreloadOperation simulates handling a preload operation
+// handlePreloadOperation executes a real firmware preload using gNOI System.SetPackage
 func (c *Controller) handlePreloadOperation(u *unstructured.Unstructured) {
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Minute)
+	defer cancel()
+
 	deviceName := u.GetName()
 	requestID, _, _ := unstructured.NestedString(u.Object, "spec", "preload", "requestId")
 	targetVersion, _, _ := unstructured.NestedString(u.Object, "spec", "preload", "targetVersion")
-
-	klog.InfoS("🔧 Processing preload operation",
-		"device", deviceName,
-		"requestId", requestID,
-		"targetVersion", targetVersion)
-
-	// In the future, this would:
-	// 1. Update status to "InProgress"
-	// 2. Call gNOI System.SetPackage RPC
-	// 3. Stream progress updates
-	// 4. Update status to "Succeeded" or "Failed"
-
 	imageURL, _, _ := unstructured.NestedString(u.Object, "spec", "preload", "imageURL")
 	checksum, _, _ := unstructured.NestedString(u.Object, "spec", "preload", "checksum", "md5")
 
-	klog.InfoS("✅ Preload operation would be executed here",
+	klog.InfoS("🔧 Starting firmware preload operation",
 		"device", deviceName,
+		"requestId", requestID,
+		"targetVersion", targetVersion,
+		"imageURL", imageURL)
+
+	// Update status to InProgress
+	if err := c.updatePreloadStatus(ctx, "InProgress", 0, "Starting firmware download and preload"); err != nil {
+		klog.ErrorS(err, "Failed to update preload status to InProgress")
+	}
+
+	// Execute the actual preload
+	if err := c.executeSetPackage(ctx, imageURL, targetVersion, checksum); err != nil {
+		klog.ErrorS(err, "Firmware preload failed", "device", deviceName, "requestId", requestID)
+		c.updatePreloadStatus(ctx, "Failed", 0, fmt.Sprintf("Preload failed: %v", err))
+		return
+	}
+
+	// Update status to Succeeded
+	if err := c.updatePreloadStatus(ctx, "Succeeded", 100, "Firmware successfully preloaded"); err != nil {
+		klog.ErrorS(err, "Failed to update preload status to Succeeded")
+	}
+
+	klog.InfoS("✅ Firmware preload completed successfully",
+		"device", deviceName,
+		"requestId", requestID,
+		"targetVersion", targetVersion)
+}
+
+// queryOSVersion queries the current OS version via gNOI OS.Verify
+func (c *Controller) queryOSVersion(ctx context.Context) (string, error) {
+	endpoint := fmt.Sprintf("%s:8080", c.deviceName)
+
+	// Create gRPC connection
+	conn, err := grpc.DialContext(ctx, endpoint,
+		grpc.WithTransportCredentials(insecure.NewCredentials()),
+		grpc.WithBlock(),
+	)
+	if err != nil {
+		return "", fmt.Errorf("failed to connect to gNOI server %s: %w", endpoint, err)
+	}
+	defer conn.Close()
+
+	// Create OS service client
+	client := os.NewOSClient(conn)
+
+	// Call Verify to get current OS version
+	req := &os.VerifyRequest{}
+	resp, err := client.Verify(ctx, req)
+	if err != nil {
+		return "", fmt.Errorf("gNOI OS.Verify failed: %w", err)
+	}
+
+	return resp.Version, nil
+}
+
+// updateCRDStatus updates the NetworkDevice CRD status with current OS version
+func (c *Controller) updateCRDStatus(ctx context.Context, currentVersion string) error {
+	networkDeviceGVR := schema.GroupVersionResource{
+		Group:    "sonic.io",
+		Version:  "v1",
+		Resource: "networkdevices",
+	}
+
+	// Get current NetworkDevice resource
+	device, err := c.dynamicClient.Resource(networkDeviceGVR).Namespace("default").Get(ctx, c.deviceName, metav1.GetOptions{})
+	if err != nil {
+		return fmt.Errorf("failed to get NetworkDevice %s: %w", c.deviceName, err)
+	}
+
+	// Update status.os.currentVersion
+	if device.Object["status"] == nil {
+		device.Object["status"] = make(map[string]interface{})
+	}
+	status := device.Object["status"].(map[string]interface{})
+
+	if status["os"] == nil {
+		status["os"] = make(map[string]interface{})
+	}
+	osStatus := status["os"].(map[string]interface{})
+	osStatus["currentVersion"] = currentVersion
+
+	// Update the status subresource
+	_, err = c.dynamicClient.Resource(networkDeviceGVR).Namespace("default").UpdateStatus(ctx, device, metav1.UpdateOptions{})
+	if err != nil {
+		return fmt.Errorf("failed to update NetworkDevice %s status: %w", c.deviceName, err)
+	}
+
+	return nil
+}
+
+// StartOSVersionSync starts a periodic sync of OS version from device to CRD status
+func (c *Controller) StartOSVersionSync(ctx context.Context, interval time.Duration) {
+	ticker := time.NewTicker(interval)
+	defer ticker.Stop()
+
+	// Do initial sync immediately
+	c.syncOSVersion(ctx)
+
+	for {
+		select {
+		case <-ctx.Done():
+			klog.InfoS("OS version sync stopped")
+			return
+		case <-ticker.C:
+			c.syncOSVersion(ctx)
+		}
+	}
+}
+
+// syncOSVersion performs a single OS version sync
+func (c *Controller) syncOSVersion(ctx context.Context) {
+	klog.V(2).InfoS("🔍 Syncing OS version from device", "device", c.deviceName)
+
+	// Query current OS version from device
+	ctx, cancel := context.WithTimeout(ctx, 10*time.Second)
+	defer cancel()
+
+	currentVersion, err := c.queryOSVersion(ctx)
+	if err != nil {
+		klog.ErrorS(err, "Failed to query OS version from device", "device", c.deviceName)
+		return
+	}
+
+	klog.InfoS("📱 Retrieved OS version from device",
+		"device", c.deviceName,
+		"version", currentVersion)
+
+	// Update CRD status
+	if err := c.updateCRDStatus(ctx, currentVersion); err != nil {
+		klog.ErrorS(err, "Failed to update CRD status", "device", c.deviceName)
+		return
+	}
+
+	klog.InfoS("✅ Updated NetworkDevice CRD status",
+		"device", c.deviceName,
+		"currentVersion", currentVersion)
+}
+
+// executeSetPackage calls gNOI System.SetPackage to preload firmware (activate=false)
+func (c *Controller) executeSetPackage(ctx context.Context, imageURL, targetVersion, checksum string) error {
+	endpoint := fmt.Sprintf("%s:8080", c.deviceName)
+
+	// Create gRPC connection
+	conn, err := grpc.DialContext(ctx, endpoint,
+		grpc.WithTransportCredentials(insecure.NewCredentials()),
+		grpc.WithBlock(),
+	)
+	if err != nil {
+		return fmt.Errorf("failed to connect to gNOI server %s: %w", endpoint, err)
+	}
+	defer conn.Close()
+
+	// Create System service client
+	client := system.NewSystemClient(conn)
+
+	// Create streaming client
+	stream, err := client.SetPackage(ctx)
+	if err != nil {
+		return fmt.Errorf("failed to create SetPackage stream: %w", err)
+	}
+
+	klog.InfoS("📦 Sending SetPackage request",
 		"imageURL", imageURL,
-		"checksum", checksum)
+		"targetVersion", targetVersion,
+		"activate", false)
+
+	// Send Package request (first message)
+	packageReq := &system.SetPackageRequest{
+		Request: &system.SetPackageRequest_Package{
+			Package: &system.Package{
+				Filename:       "/tmp/sonic-firmware.bin", // Destination path on device
+				Version:        targetVersion,
+				Activate:       false, // Critical: preload only, don't activate
+				RemoteDownload: &common.RemoteDownload{
+					Path:     imageURL, // Source URL to download from
+					Protocol: common.RemoteDownload_HTTP,
+				},
+			},
+		},
+	}
+
+	if err := stream.Send(packageReq); err != nil {
+		return fmt.Errorf("failed to send package request: %w", err)
+	}
+
+	// Close send side and receive response
+	resp, err := stream.CloseAndRecv()
+	if err != nil {
+		return fmt.Errorf("SetPackage operation failed: %w", err)
+	}
+
+	klog.InfoS("✅ SetPackage completed successfully",
+		"response", resp.String())
+
+	return nil
+}
+
+// updatePreloadStatus updates the preload status in the CRD
+func (c *Controller) updatePreloadStatus(ctx context.Context, phase string, progress int, message string) error {
+	networkDeviceGVR := schema.GroupVersionResource{
+		Group:    "sonic.io",
+		Version:  "v1",
+		Resource: "networkdevices",
+	}
+
+	// Get current NetworkDevice resource
+	device, err := c.dynamicClient.Resource(networkDeviceGVR).Namespace("default").Get(ctx, c.deviceName, metav1.GetOptions{})
+	if err != nil {
+		return fmt.Errorf("failed to get NetworkDevice %s: %w", c.deviceName, err)
+	}
+
+	// Update status.preload
+	if device.Object["status"] == nil {
+		device.Object["status"] = make(map[string]interface{})
+	}
+	status := device.Object["status"].(map[string]interface{})
+
+	if status["preload"] == nil {
+		status["preload"] = make(map[string]interface{})
+	}
+	preloadStatus := status["preload"].(map[string]interface{})
+
+	preloadStatus["phase"] = phase
+	preloadStatus["progress"] = progress
+	preloadStatus["message"] = message
+
+	// Update the status subresource
+	_, err = c.dynamicClient.Resource(networkDeviceGVR).Namespace("default").UpdateStatus(ctx, device, metav1.UpdateOptions{})
+	if err != nil {
+		return fmt.Errorf("failed to update NetworkDevice %s preload status: %w", c.deviceName, err)
+	}
+
+	klog.InfoS("📊 Updated preload status",
+		"device", c.deviceName,
+		"phase", phase,
+		"progress", progress,
+		"message", message)
+
+	return nil
 }

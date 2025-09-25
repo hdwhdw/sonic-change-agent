@@ -10,11 +10,11 @@ spec:
     osType: SONiC
     desiredVersion: "202511.01"
   preload:
-    targetVersion: "202511.01"
-    imageURL: "https://firmware.azure.com/sonic/202511.01/sonic.bin"
+    targetVersion: "SONiC-VS-20250505.03"
+    imageURL: "http://localhost:8888/sonic-vs-20250505.03.bin"
     checksum:
       md5: "d41d8cd98f00b204e9800998ecf8427e"
-    requestId: "test-request-789"
+    requestId: "real-preload-001"
     mode: Manual
 status:
   state: Healthy

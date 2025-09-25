@@ -124,8 +124,10 @@ ssh admin@vlab-01 "sudo docker logs \$(sudo docker ps --filter 'name=k8s_sonic-c
 You should see:
 - `🟡 NetworkDevice UPDATED` - Shows the agent detected the change
 - `🚀 New preload operation requested` - Shows it identified the new requestId
-- `🔧 Processing preload operation` - Shows it's simulating the preload
-- `✅ Preload operation would be executed here` - Shows where actual gNOI calls would go
+- `🔧 Starting firmware preload operation` - Shows it's starting real preload
+- `📦 Sending SetPackage request` - Shows actual gNOI System.SetPackage call
+- `✅ SetPackage completed successfully` - Shows successful firmware download (2GB)
+- `✅ Firmware preload completed successfully` - Shows full operation success
 
 ### Step 8: Add a Complete Preload Operation
 
@@ -184,7 +186,72 @@ NO_PROXY=192.168.49.2 minikube kubectl -- patch networkdevice demo-device --type
 ssh admin@vlab-01 "sudo docker logs \$(sudo docker ps --filter 'name=k8s_sonic-change-agent' --format '{{.ID}}') --tail=3"
 ```
 
-### Step 11: Clean Up Demo Resources
+### Step 8: Verify Real Firmware Download
+
+Check that the firmware was actually downloaded to the SONiC device:
+
+```bash
+# Check disk usage and firmware file on device
+ssh admin@vlab-01 "df -h /tmp && ls -lah /tmp/sonic-firmware.bin"
+
+# Expected output:
+# Filesystem      Size  Used Avail Use% Mounted on
+# tmpfs           4.0G  1.9G  2.2G  47% /tmp
+# -rw------- 1 root root 1.9G Sep 25 19:05 /tmp/sonic-firmware.bin
+```
+
+This shows the 2GB SONiC firmware image was successfully downloaded via gNOI System.SetPackage.
+
+### Step 9: Check CRD Status After Preload
+
+Verify the NetworkDevice CRD status was updated to reflect the successful preload:
+
+```bash
+# Check preload status in CRD
+NO_PROXY=192.168.49.2 minikube kubectl -- get networkdevice vlab-01 -o jsonpath='{.status.preload}' && echo
+
+# Expected output:
+# {"message":"Firmware successfully preloaded","phase":"Succeeded","progress":100}
+```
+
+### Step 10: Demonstrate OS Version Sync from Device
+
+Now let's demonstrate the bidirectional communication - the agent querying the actual SONiC device and updating the CRD status:
+
+```bash
+# Check current CRD status (may show old static value)
+NO_PROXY=192.168.49.2 minikube kubectl -- get networkdevice vlab-01 -o jsonpath='{.status.os.currentVersion}' && echo
+
+# The agent queries the device every minute, but let's see the real-time logs
+ssh admin@vlab-01 "sudo docker logs \$(sudo docker ps --filter 'name=k8s_sonic-change-agent' --format '{{.ID}}') --tail=10"
+```
+
+You should see logs showing:
+- `🔍 Syncing OS version from device` - Agent starting sync
+- `📱 Retrieved OS version from device` - Successful gNOI OS.Verify call (shows "SONiC-OS-20250510.21")
+- `✅ Updated NetworkDevice CRD status` - CRD status updated with live data
+
+```bash
+# Verify the CRD now shows the REAL OS version from the device
+NO_PROXY=192.168.49.2 minikube kubectl -- get networkdevice vlab-01 -o jsonpath='{.status.os.currentVersion}' && echo
+
+# Compare with what the device actually reports via gRPC
+grpcurl -plaintext -d '{}' vlab-01:8080 gnoi.os.OS/Verify
+```
+
+### Step 11: Demonstrate Continuous Sync
+
+The agent syncs every minute. To see this in action:
+
+```bash
+# Watch the agent logs for periodic sync (runs every minute)
+ssh admin@vlab-01 "sudo docker logs \$(sudo docker ps --filter 'name=k8s_sonic-change-agent' --format '{{.ID}}') -f"
+
+# In another terminal, watch the CRD status for any changes
+NO_PROXY=192.168.49.2 minikube kubectl -- get networkdevice vlab-01 -o jsonpath='{.status.os.currentVersion}' -w
+```
+
+### Step 12: Clean Up Demo Resources
 
 Remove the demo NetworkDevice:
 
@@ -214,7 +281,22 @@ NO_PROXY=192.168.49.2 minikube kubectl -- delete networkdevice demo-device
 - Agent detects differences and takes action
 - Status field tracks current state and operation progress
 
-### 5. **Event-Driven Architecture**
+### 5. **Bidirectional Communication**
+- **Kubernetes → Device**: CRD changes trigger agent actions (preload operations)
+- **Device → Kubernetes**: Agent queries device state and updates CRD status
+- Real device data synchronized to Kubernetes via gNOI OS.Verify calls
+- Maintains current OS version in CRD status automatically
+
+### 6. **gNOI Integration**
+- Uses OpenConfig gNOI (gRPC Network Operations Interface)
+- **OS Version Sync**: Calls `gnoi.os.OS/Verify` to get current OS version from device
+- **Firmware Preload**: Calls `gnoi.system.System/SetPackage` with `activate=false` for staging firmware
+- **HTTP Download**: Uses RemoteDownload protocol to stream 2GB firmware images directly to device
+- **Real Operations**: Downloads actual SONiC firmware to `/tmp/sonic-firmware.bin` (not simulation)
+- Plaintext gRPC connection to `:8080` (secure options available)
+- Demonstrates modern network device APIs vs legacy SSH
+
+### 7. **Event-Driven Architecture**
 - Changes to NetworkDevice resources trigger immediate agent response
 - No polling required - real-time responsiveness
 - Scalable to many devices
@@ -224,8 +306,12 @@ NO_PROXY=192.168.49.2 minikube kubectl -- delete networkdevice demo-device
 1. **Setup Verification** (2 min): Confirm cluster and agent are running
 2. **Initial State** (1 min): Show agent detected existing configuration
 3. **Change Detection** (3 min): Modify NetworkDevice, observe agent response
-4. **Filtering Demo** (2 min): Show agent only processes its own device
-5. **Explanation** (5 min): Explain the Kubernetes-native approach benefits
+4. **Real Firmware Preload** (5 min): Watch 2GB firmware download via gNOI System.SetPackage
+5. **CRD Status Verification** (2 min): Show successful preload status in Kubernetes
+6. **OS Version Sync Demo** (3 min): Show bidirectional communication with device
+7. **Continuous Sync** (2 min): Demonstrate periodic device state synchronization
+8. **Filtering Demo** (2 min): Show agent only processes its own device
+9. **Architecture Benefits** (3 min): Explain the Kubernetes-native approach
 
 ## Troubleshooting
 
@@ -253,10 +339,19 @@ ssh admin@vlab-01 "curl -k https://10.52.0.72:6443 --connect-timeout 5"
 ## Architecture Benefits Highlighted
 
 - **Kubernetes-Native**: Uses standard Kubernetes APIs and patterns
+- **Bidirectional Communication**: Both declarative management AND device state synchronization
+- **Modern APIs**: gRPC/gNOI instead of legacy SSH and screen scraping
 - **Scalable**: Controller pattern scales to hundreds of devices
 - **Reliable**: Built-in retry logic and eventual consistency
-- **Observable**: Standard Kubernetes logging and monitoring
+- **Observable**: Standard Kubernetes logging and monitoring with structured data
 - **Declarative**: Infrastructure-as-code approach to device management
 - **Event-Driven**: Real-time response to configuration changes
+- **Live Status**: CRD status reflects actual device state, not just desired state
 
-This demo shows the foundation for replacing legacy SSH-based firmware management with a modern, Kubernetes-native approach using CRDs and controllers.
+This demo shows the foundation for replacing legacy SSH-based firmware management with a modern, Kubernetes-native approach using CRDs, controllers, and gNOI APIs. The **real firmware preload operations** prove that:
+
+1. **Kubernetes → Device**: CRD changes trigger actual gNOI System.SetPackage calls that download 2GB firmware images
+2. **Device → Kubernetes**: Agent queries device state via gNOI OS.Verify and updates CRD status with live data
+3. **Production-Ready**: Handles real SONiC firmware files, proper error handling, and status tracking
+
+The bidirectional communication demonstrates that Kubernetes can serve as both a configuration source AND a device state repository for real network device management.
