@@ -45,6 +45,10 @@ spec:
                     type: string
                     enum: ["Manual", "Auto"]
                     default: "Manual"
+                  downloadPath:
+                    type: string
+                    description: "Target path on device for firmware download"
+                    default: "/tmp/sonic-firmware.bin"
           status:
             type: object
             properties:

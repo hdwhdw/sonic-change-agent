@@ -208,6 +208,10 @@ func (c *Controller) handlePreloadOperation(u *unstructured.Unstructured) {
 	targetVersion, _, _ := unstructured.NestedString(u.Object, "spec", "preload", "targetVersion")
 	imageURL, _, _ := unstructured.NestedString(u.Object, "spec", "preload", "imageURL")
 	checksum, _, _ := unstructured.NestedString(u.Object, "spec", "preload", "checksum", "md5")
+	downloadPath, _, _ := unstructured.NestedString(u.Object, "spec", "preload", "downloadPath")
+	if downloadPath == "" {
+		downloadPath = "/tmp/sonic-firmware.bin" // Default fallback
+	}
 
 	klog.InfoS("🔧 Starting firmware preload operation",
 		"device", deviceName,
@@ -221,7 +225,7 @@ func (c *Controller) handlePreloadOperation(u *unstructured.Unstructured) {
 	}
 
 	// Execute the actual preload
-	if err := c.executeSetPackage(ctx, imageURL, targetVersion, checksum); err != nil {
+	if err := c.executeSetPackage(ctx, imageURL, targetVersion, checksum, downloadPath); err != nil {
 		klog.ErrorS(err, "Firmware preload failed", "device", deviceName, "requestId", requestID)
 		c.updatePreloadStatus(ctx, "Failed", 0, fmt.Sprintf("Preload failed: %v", err))
 		return
@@ -349,7 +353,7 @@ func (c *Controller) syncOSVersion(ctx context.Context) {
 }
 
 // executeSetPackage calls gNOI System.SetPackage to preload firmware (activate=false)
-func (c *Controller) executeSetPackage(ctx context.Context, imageURL, targetVersion, checksum string) error {
+func (c *Controller) executeSetPackage(ctx context.Context, imageURL, targetVersion, checksum, downloadPath string) error {
 	endpoint := fmt.Sprintf("%s:8080", c.deviceName)
 
 	// Create gRPC connection
@@ -380,7 +384,7 @@ func (c *Controller) executeSetPackage(ctx context.Context, imageURL, targetVers
 	packageReq := &system.SetPackageRequest{
 		Request: &system.SetPackageRequest_Package{
 			Package: &system.Package{
-				Filename:       "/tmp/sonic-firmware.bin", // Destination path on device
+				Filename:       downloadPath, // Destination path on device from CRD
 				Version:        targetVersion,
 				Activate:       false, // Critical: preload only, don't activate
 				RemoteDownload: &common.RemoteDownload{

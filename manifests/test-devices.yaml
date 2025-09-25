@@ -11,11 +11,12 @@ spec:
     desiredVersion: "202511.01"
   preload:
     targetVersion: "SONiC-VS-20250505.03"
-    imageURL: "http://localhost:8888/sonic-vs-20250505.03.bin"
+    imageURL: "http://10.250.0.1:8888/sonic-vs-20250505.03.bin"
     checksum:
       md5: "d41d8cd98f00b204e9800998ecf8427e"
     requestId: "real-preload-001"
     mode: Manual
+    downloadPath: "/tmp/sonic-firmware.bin"
 status:
   state: Healthy
   os:
