@@ -1,0 +1,73 @@
+apiVersion: apps/v1
+kind: DaemonSet
+metadata:
+  name: sonic-change-agent
+  namespace: default
+  labels:
+    app: sonic-change-agent
+    version: v0.1.0
+spec:
+  selector:
+    matchLabels:
+      app: sonic-change-agent
+  template:
+    metadata:
+      labels:
+        app: sonic-change-agent
+        version: v0.1.0
+    spec:
+      # Use host network to work around CNI issues on vlab-01
+      hostNetwork: true
+      # Only schedule on SONiC nodes (not the master)
+      nodeSelector:
+        kubernetes.io/os: linux
+      tolerations:
+      - key: node-role.kubernetes.io/master
+        operator: Exists
+        effect: NoSchedule
+      - key: node-role.kubernetes.io/control-plane
+        operator: Exists
+        effect: NoSchedule
+      containers:
+      - name: sonic-change-agent
+        image: sonic-change-agent:v0.1.0
+        imagePullPolicy: Never  # Use local image for testing
+        args:
+        - --device-name=$(NODE_NAME)
+        - --interval=10s
+        - --v=2
+        env:
+        - name: NODE_NAME
+          valueFrom:
+            fieldRef:
+              fieldPath: spec.nodeName
+        resources:
+          requests:
+            cpu: 10m
+            memory: 32Mi
+          limits:
+            cpu: 100m
+            memory: 128Mi
+        # Health checks
+        livenessProbe:
+          exec:
+            command:
+            - /bin/sh
+            - -c
+            - "pgrep sonic-change-agent"
+          initialDelaySeconds: 30
+          periodSeconds: 30
+        readinessProbe:
+          exec:
+            command:
+            - /bin/sh
+            - -c
+            - "pgrep sonic-change-agent"
+          initialDelaySeconds: 5
+          periodSeconds: 10
+      # Run with minimal privileges
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 1001
+        fsGroup: 1001
+      restartPolicy: Always
