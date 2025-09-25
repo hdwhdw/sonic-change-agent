@@ -1,0 +1,48 @@
+---
+# NetworkDevice for vlab-01 (actual SONiC device)
+apiVersion: sonic.io/v1
+kind: NetworkDevice
+metadata:
+  name: vlab-01
+  namespace: default
+spec:
+  os:
+    osType: SONiC
+    desiredVersion: "202511.01"
+  preload:
+    targetVersion: "202511.01"
+    imageURL: "https://firmware.azure.com/sonic/202511.01/sonic.bin"
+    checksum:
+      md5: "d41d8cd98f00b204e9800998ecf8427e"
+    requestId: "test-request-789"
+    mode: Manual
+status:
+  state: Healthy
+  os:
+    currentVersion: "202505.39"
+
+---
+# NetworkDevice with preload operation for testing
+apiVersion: sonic.io/v1
+kind: NetworkDevice
+metadata:
+  name: vlab-01-preload-test
+  namespace: default
+spec:
+  os:
+    osType: SONiC
+    desiredVersion: "202511.01"
+  preload:
+    targetVersion: "202511.01"
+    imageURL: "https://firmware.azure.com/sonic/202511.01/sonic.bin"
+    checksum:
+      md5: "d41d8cd98f00b204e9800998ecf8427e"
+    requestId: "test-request-123"
+    mode: Manual
+status:
+  state: Healthy
+  os:
+    currentVersion: "202505.39"
+  preload:
+    observedRequestId: ""
+    phase: Pending

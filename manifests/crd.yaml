@@ -1,0 +1,118 @@
+apiVersion: apiextensions.k8s.io/v1
+kind: CustomResourceDefinition
+metadata:
+  name: networkdevices.sonic.io
+spec:
+  group: sonic.io
+  versions:
+  - name: v1
+    served: true
+    storage: true
+    schema:
+      openAPIV3Schema:
+        type: object
+        properties:
+          spec:
+            type: object
+            properties:
+              os:
+                type: object
+                properties:
+                  osType:
+                    type: string
+                    enum: ["SONiC"]
+                  desiredVersion:
+                    type: string
+                    description: "Target OS version for declarative upgrades"
+              preload:
+                type: object
+                description: "Declarative action block for explicit preload operations"
+                properties:
+                  targetVersion:
+                    type: string
+                  imageURL:
+                    type: string
+                    format: uri
+                  checksum:
+                    type: object
+                    properties:
+                      md5:
+                        type: string
+                  requestId:
+                    type: string
+                    description: "Client-provided idempotency key"
+                  mode:
+                    type: string
+                    enum: ["Manual", "Auto"]
+                    default: "Manual"
+          status:
+            type: object
+            properties:
+              state:
+                type: string
+                enum: ["Healthy", "Failing", "Isolated", "Offline"]
+                default: "Healthy"
+              os:
+                type: object
+                properties:
+                  currentVersion:
+                    type: string
+                  preloadedVersion:
+                    type: string
+              preload:
+                type: object
+                properties:
+                  observedRequestId:
+                    type: string
+                  phase:
+                    type: string
+                    enum: ["Pending", "InProgress", "Succeeded", "Failed", "Aborted"]
+                  progress:
+                    type: integer
+                    minimum: 0
+                    maximum: 100
+                  message:
+                    type: string
+              conditions:
+                type: array
+                items:
+                  type: object
+                  required: ["type", "status"]
+                  properties:
+                    type:
+                      type: string
+                    status:
+                      type: string
+                      enum: ["True", "False", "Unknown"]
+                    reason:
+                      type: string
+                    message:
+                      type: string
+                    lastTransitionTime:
+                      type: string
+                      format: date-time
+    subresources:
+      status: {}  # Enables /status subresource
+    additionalPrinterColumns:
+    - name: State
+      type: string
+      jsonPath: .status.state
+    - name: Current Version
+      type: string
+      jsonPath: .status.os.currentVersion
+    - name: Desired Version
+      type: string
+      jsonPath: .spec.os.desiredVersion
+    - name: Preload Phase
+      type: string
+      jsonPath: .status.preload.phase
+    - name: Age
+      type: date
+      jsonPath: .metadata.creationTimestamp
+  scope: Namespaced
+  names:
+    plural: networkdevices
+    singular: networkdevice
+    kind: NetworkDevice
+    shortNames:
+    - netdev

@@ -18,19 +18,19 @@ spec:
     spec:
       # Use host network to work around CNI issues on vlab-01
       hostNetwork: true
-      # Only schedule on SONiC nodes (not the master)
-      nodeSelector:
-        kubernetes.io/os: linux
-      tolerations:
-      - key: node-role.kubernetes.io/master
-        operator: Exists
-        effect: NoSchedule
-      - key: node-role.kubernetes.io/control-plane
-        operator: Exists
-        effect: NoSchedule
+      # Only schedule on worker nodes (SONiC devices), NOT on master/control-plane
+      affinity:
+        nodeAffinity:
+          requiredDuringSchedulingIgnoredDuringExecution:
+            nodeSelectorTerms:
+            - matchExpressions:
+              - key: node-role.kubernetes.io/control-plane
+                operator: DoesNotExist
+              - key: node-role.kubernetes.io/master
+                operator: DoesNotExist
       containers:
       - name: sonic-change-agent
-        image: sonic-change-agent:v0.1.0
+        image: sonic-change-agent:latest
         imagePullPolicy: Never  # Use local image for testing
         args:
         - --device-name=$(NODE_NAME)
