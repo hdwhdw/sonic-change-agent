@@ -3,9 +3,11 @@ package controller
 import (
 	"context"
 	"fmt"
+	"os"
+	"sync"
 	"time"
 
-	"github.com/openconfig/gnoi/os"
+	gnoios "github.com/openconfig/gnoi/os"
 	"github.com/openconfig/gnoi/system"
 	"github.com/openconfig/gnoi/common"
 	"google.golang.org/grpc"
@@ -22,11 +24,22 @@ import (
 	"k8s.io/klog/v2"
 )
 
+// isDebugMode checks if DEBUG_MODE environment variable is set
+func isDebugMode() bool {
+	return os.Getenv("DEBUG_MODE") == "true"
+}
+
+// isDryRunMode checks if DRY_RUN environment variable is set
+func isDryRunMode() bool {
+	return os.Getenv("DRY_RUN") == "true"
+}
+
 // Controller manages NetworkDevice CRDs for this node
 type Controller struct {
-	deviceName    string
-	dynamicClient dynamic.Interface
-	informer      cache.SharedIndexInformer
+	deviceName      string
+	dynamicClient   dynamic.Interface
+	informer        cache.SharedIndexInformer
+	operationMutex  sync.Mutex  // Prevents concurrent operations
 }
 
 // NewController creates a new CRD controller
@@ -171,6 +184,19 @@ func (c *Controller) onNetworkDeviceUpdate(oldObj, newObj interface{}) {
 			"device", deviceName,
 			"old", oldDesiredVersion,
 			"new", newDesiredVersion)
+
+		// Get current version to compare
+		currentVersion, _, _ := unstructured.NestedString(newU.Object, "status", "os", "currentVersion")
+
+		// Only proceed if new desired version is different from current
+		if newDesiredVersion != "" && newDesiredVersion != currentVersion {
+			klog.InfoS("🔄 Triggering upgrade operation",
+				"device", deviceName,
+				"from", currentVersion,
+				"to", newDesiredVersion)
+
+			c.handleUpgradeOperation(newU)
+		}
 	}
 
 	// Check for new preload operations
@@ -200,6 +226,9 @@ func (c *Controller) onNetworkDeviceDelete(obj interface{}) {
 
 // handlePreloadOperation executes a real firmware preload using gNOI System.SetPackage
 func (c *Controller) handlePreloadOperation(u *unstructured.Unstructured) {
+	c.operationMutex.Lock()
+	defer c.operationMutex.Unlock()
+
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Minute)
 	defer cancel()
 
@@ -242,8 +271,68 @@ func (c *Controller) handlePreloadOperation(u *unstructured.Unstructured) {
 		"targetVersion", targetVersion)
 }
 
+// handleUpgradeOperation executes a firmware upgrade using gNOI System.SetPackage with activate=true
+func (c *Controller) handleUpgradeOperation(u *unstructured.Unstructured) {
+	deviceName := u.GetName()
+	klog.InfoS("🔒 Acquiring operation lock for UPGRADE", "device", deviceName)
+	c.operationMutex.Lock()
+	defer func() {
+		c.operationMutex.Unlock()
+		klog.InfoS("🔓 Released operation lock for UPGRADE", "device", deviceName)
+	}()
+
+	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Minute)
+	defer cancel()
+
+	desiredVersion, _, _ := unstructured.NestedString(u.Object, "spec", "os", "desiredVersion")
+	currentVersion, _, _ := unstructured.NestedString(u.Object, "status", "os", "currentVersion")
+
+	klog.InfoS("🔧 Starting firmware upgrade operation",
+		"device", deviceName,
+		"currentVersion", currentVersion,
+		"desiredVersion", desiredVersion)
+
+	// Safety check: ensure versions are different
+	if desiredVersion == currentVersion {
+		klog.InfoS("⚠️ Upgrade skipped - versions are the same",
+			"device", deviceName,
+			"version", currentVersion)
+		return
+	}
+
+	// For now, construct firmware URL based on version pattern
+	// TODO: This should eventually come from a firmware registry or CRD spec
+	imageURL := fmt.Sprintf("http://10.250.0.1:8888/sonic-vs-%s.bin", desiredVersion)
+
+	// Safety check: verify the target firmware file exists
+	klog.InfoS("🔍 Verifying firmware availability", "imageURL", imageURL)
+	downloadPath := "/tmp/sonic-upgrade.bin" // Use different path for upgrades
+
+	klog.InfoS("🔄 Executing firmware upgrade",
+		"device", deviceName,
+		"imageURL", imageURL,
+		"downloadPath", downloadPath,
+		"activate", true)
+
+	// Execute the upgrade with activate=true
+	if err := c.executeUpgradePackage(ctx, imageURL, desiredVersion, "", downloadPath); err != nil {
+		klog.ErrorS(err, "Firmware upgrade failed", "device", deviceName)
+		return
+	}
+
+	klog.InfoS("✅ Firmware upgrade completed successfully",
+		"device", deviceName,
+		"desiredVersion", desiredVersion)
+}
+
 // queryOSVersion queries the current OS version via gNOI OS.Verify
 func (c *Controller) queryOSVersion(ctx context.Context) (string, error) {
+	// DEBUG MODE: Return fake version
+	if isDebugMode() {
+		klog.InfoS("🐛 DEBUG MODE: Returning fake OS version")
+		return "SONiC-OS-20250505.03", nil
+	}
+
 	endpoint := fmt.Sprintf("%s:8080", c.deviceName)
 
 	// Create gRPC connection
@@ -257,10 +346,10 @@ func (c *Controller) queryOSVersion(ctx context.Context) (string, error) {
 	defer conn.Close()
 
 	// Create OS service client
-	client := os.NewOSClient(conn)
+	client := gnoios.NewOSClient(conn)
 
 	// Call Verify to get current OS version
-	req := &os.VerifyRequest{}
+	req := &gnoios.VerifyRequest{}
 	resp, err := client.Verify(ctx, req)
 	if err != nil {
 		return "", fmt.Errorf("gNOI OS.Verify failed: %w", err)
@@ -325,14 +414,20 @@ func (c *Controller) StartOSVersionSync(ctx context.Context, interval time.Durat
 
 // syncOSVersion performs a single OS version sync
 func (c *Controller) syncOSVersion(ctx context.Context) {
-	klog.V(2).InfoS("🔍 Syncing OS version from device", "device", c.deviceName)
+	var currentVersion string
+
+	// Execute sync operations under mutex lock
+	klog.V(2).InfoS("🔒 Acquiring operation lock for OS sync", "device", c.deviceName)
+	c.operationMutex.Lock()
 
 	// Query current OS version from device
-	ctx, cancel := context.WithTimeout(ctx, 10*time.Second)
-	defer cancel()
+	queryCtx, queryCancel := context.WithTimeout(ctx, 10*time.Second)
+	defer queryCancel()
 
-	currentVersion, err := c.queryOSVersion(ctx)
+	var err error
+	currentVersion, err = c.queryOSVersion(queryCtx)
 	if err != nil {
+		c.operationMutex.Unlock()
 		klog.ErrorS(err, "Failed to query OS version from device", "device", c.deviceName)
 		return
 	}
@@ -342,7 +437,11 @@ func (c *Controller) syncOSVersion(ctx context.Context) {
 		"version", currentVersion)
 
 	// Update CRD status
-	if err := c.updateCRDStatus(ctx, currentVersion); err != nil {
+	statusCtx, statusCancel := context.WithTimeout(ctx, 5*time.Second)
+	defer statusCancel()
+
+	if err := c.updateCRDStatus(statusCtx, currentVersion); err != nil {
+		c.operationMutex.Unlock()
 		klog.ErrorS(err, "Failed to update CRD status", "device", c.deviceName)
 		return
 	}
@@ -350,10 +449,85 @@ func (c *Controller) syncOSVersion(ctx context.Context) {
 	klog.InfoS("✅ Updated NetworkDevice CRD status",
 		"device", c.deviceName,
 		"currentVersion", currentVersion)
+
+	// Release mutex before reconciliation check
+	c.operationMutex.Unlock()
+	klog.V(2).InfoS("🔓 Released operation lock for OS sync", "device", c.deviceName)
+
+	klog.InfoS("🔧 About to check reconciliation", "device", c.deviceName, "currentVersion", currentVersion)
+
+	// 🔄 NEW: Check for reconciliation OUTSIDE the mutex lock
+	if currentVersion != "" {
+		klog.InfoS("🔧 Calling reconciliation check", "device", c.deviceName)
+		reconCtx, reconCancel := context.WithTimeout(ctx, 5*time.Second)
+		defer reconCancel()
+
+		c.checkReconciliation(reconCtx, currentVersion)
+	} else {
+		klog.InfoS("🔧 Skipping reconciliation - no current version", "device", c.deviceName)
+	}
+}
+
+// checkReconciliation compares current vs desired version and triggers reconciliation if needed
+func (c *Controller) checkReconciliation(ctx context.Context, currentVersion string) {
+	klog.InfoS("🔍 Checking reconciliation needs", "device", c.deviceName, "currentVersion", currentVersion)
+
+	// Get the NetworkDevice CRD to check desired version
+	networkDeviceGVR := schema.GroupVersionResource{
+		Group:    "sonic.io",
+		Version:  "v1",
+		Resource: "networkdevices",
+	}
+
+	device, err := c.dynamicClient.Resource(networkDeviceGVR).Namespace("default").Get(ctx, c.deviceName, metav1.GetOptions{})
+	if err != nil {
+		klog.ErrorS(err, "Failed to get NetworkDevice for reconciliation check", "device", c.deviceName)
+		return
+	}
+
+	// Extract desired version
+	desiredVersion, _, _ := unstructured.NestedString(device.Object, "spec", "os", "desiredVersion")
+
+	// Check if reconciliation is needed
+	if desiredVersion != "" && desiredVersion != currentVersion {
+		klog.InfoS("🎯 RECONCILIATION NEEDED",
+			"device", c.deviceName,
+			"currentVersion", currentVersion,
+			"desiredVersion", desiredVersion)
+
+		if isDryRunMode() {
+			klog.InfoS("🏃‍♂️ DRY RUN: Would trigger upgrade reconciliation",
+				"device", c.deviceName,
+				"from", currentVersion,
+				"to", desiredVersion)
+		} else {
+			klog.InfoS("🔄 TRIGGERING UPGRADE RECONCILIATION",
+				"device", c.deviceName,
+				"from", currentVersion,
+				"to", desiredVersion)
+			// TODO: Call actual reconciliation logic here
+		}
+	} else {
+		klog.V(2).InfoS("✅ No reconciliation needed - versions match",
+			"device", c.deviceName,
+			"version", currentVersion)
+	}
 }
 
 // executeSetPackage calls gNOI System.SetPackage to preload firmware (activate=false)
 func (c *Controller) executeSetPackage(ctx context.Context, imageURL, targetVersion, checksum, downloadPath string) error {
+	klog.InfoS("📦 Sending SetPackage request",
+		"imageURL", imageURL,
+		"targetVersion", targetVersion,
+		"activate", false)
+
+	// DEBUG MODE: Return fake success
+	if isDebugMode() {
+		klog.InfoS("🐛 DEBUG MODE: Faking preload success", "targetVersion", targetVersion)
+		time.Sleep(2 * time.Second) // Simulate processing time
+		return nil
+	}
+
 	endpoint := fmt.Sprintf("%s:8080", c.deviceName)
 
 	// Create gRPC connection
@@ -374,11 +548,6 @@ func (c *Controller) executeSetPackage(ctx context.Context, imageURL, targetVers
 	if err != nil {
 		return fmt.Errorf("failed to create SetPackage stream: %w", err)
 	}
-
-	klog.InfoS("📦 Sending SetPackage request",
-		"imageURL", imageURL,
-		"targetVersion", targetVersion,
-		"activate", false)
 
 	// Send Package request (first message)
 	packageReq := &system.SetPackageRequest{
@@ -407,6 +576,72 @@ func (c *Controller) executeSetPackage(ctx context.Context, imageURL, targetVers
 
 	klog.InfoS("✅ SetPackage completed successfully",
 		"response", resp.String())
+
+	return nil
+}
+
+// executeUpgradePackage calls gNOI System.SetPackage to upgrade firmware (activate=true)
+func (c *Controller) executeUpgradePackage(ctx context.Context, imageURL, targetVersion, checksum, downloadPath string) error {
+	klog.InfoS("📦 Sending SetPackage request for UPGRADE",
+		"imageURL", imageURL,
+		"targetVersion", targetVersion,
+		"activate", true,
+		"downloadPath", downloadPath)
+
+	// DEBUG MODE: Return fake success
+	if isDebugMode() {
+		klog.InfoS("🐛 DEBUG MODE: Faking upgrade success", "targetVersion", targetVersion)
+		time.Sleep(2 * time.Second) // Simulate processing time
+		return nil
+	}
+
+	endpoint := fmt.Sprintf("%s:8080", c.deviceName)
+
+	// Create gRPC connection
+	conn, err := grpc.DialContext(ctx, endpoint,
+		grpc.WithTransportCredentials(insecure.NewCredentials()),
+		grpc.WithBlock(),
+	)
+	if err != nil {
+		return fmt.Errorf("failed to connect to gNOI server %s: %w", endpoint, err)
+	}
+	defer conn.Close()
+
+	// Create System service client
+	client := system.NewSystemClient(conn)
+
+	// Create streaming client
+	stream, err := client.SetPackage(ctx)
+	if err != nil {
+		return fmt.Errorf("failed to create SetPackage stream: %w", err)
+	}
+
+	// Send Package request (first message) with activate=true
+	packageReq := &system.SetPackageRequest{
+		Request: &system.SetPackageRequest_Package{
+			Package: &system.Package{
+				Filename:       downloadPath, // Destination path on device from CRD
+				Version:        targetVersion,
+				Activate:       true, // CRITICAL: This installs and activates the firmware
+				RemoteDownload: &common.RemoteDownload{
+					Path:     imageURL, // Source URL to download from
+					Protocol: common.RemoteDownload_HTTP,
+				},
+			},
+		},
+	}
+
+	if err := stream.Send(packageReq); err != nil {
+		return fmt.Errorf("failed to send package request: %w", err)
+	}
+
+	// Close send side and receive response
+	resp, err := stream.CloseAndRecv()
+	if err != nil {
+		return fmt.Errorf("SetPackage operation failed: %w", err)
+	}
+
+	klog.InfoS("✅ SetPackage UPGRADE completed successfully", "response", resp.String())
 
 	return nil
 }

@@ -30,7 +30,7 @@ spec:
                 operator: DoesNotExist
       containers:
       - name: sonic-change-agent
-        image: sonic-change-agent:latest
+        image: sonic-change-agent:dry-run-v4
         imagePullPolicy: Never  # Use local image for testing
         args:
         - --device-name=$(NODE_NAME)
@@ -41,6 +41,10 @@ spec:
           valueFrom:
             fieldRef:
               fieldPath: spec.nodeName
+        - name: DEBUG_MODE
+          value: "false"
+        - name: DRY_RUN
+          value: "true"
         resources:
           requests:
             cpu: 10m
