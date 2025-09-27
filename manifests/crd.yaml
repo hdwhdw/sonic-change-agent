@@ -24,31 +24,6 @@ spec:
                   desiredVersion:
                     type: string
                     description: "Target OS version for declarative upgrades"
-              preload:
-                type: object
-                description: "Declarative action block for explicit preload operations"
-                properties:
-                  targetVersion:
-                    type: string
-                  imageURL:
-                    type: string
-                    format: uri
-                  checksum:
-                    type: object
-                    properties:
-                      md5:
-                        type: string
-                  requestId:
-                    type: string
-                    description: "Client-provided idempotency key"
-                  mode:
-                    type: string
-                    enum: ["Manual", "Auto"]
-                    default: "Manual"
-                  downloadPath:
-                    type: string
-                    description: "Target path on device for firmware download"
-                    default: "/tmp/sonic-firmware.bin"
           status:
             type: object
             properties:
@@ -60,22 +35,6 @@ spec:
                 type: object
                 properties:
                   currentVersion:
-                    type: string
-                  preloadedVersion:
-                    type: string
-              preload:
-                type: object
-                properties:
-                  observedRequestId:
-                    type: string
-                  phase:
-                    type: string
-                    enum: ["Pending", "InProgress", "Succeeded", "Failed", "Aborted"]
-                  progress:
-                    type: integer
-                    minimum: 0
-                    maximum: 100
-                  message:
                     type: string
               conditions:
                 type: array
@@ -107,9 +66,6 @@ spec:
     - name: Desired Version
       type: string
       jsonPath: .spec.os.desiredVersion
-    - name: Preload Phase
-      type: string
-      jsonPath: .status.preload.phase
     - name: Age
       type: date
       jsonPath: .metadata.creationTimestamp

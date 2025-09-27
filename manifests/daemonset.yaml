@@ -16,6 +16,7 @@ spec:
         app: sonic-change-agent
         version: v0.1.0
     spec:
+      serviceAccountName: sonic-change-agent
       # Use host network to work around CNI issues on vlab-01
       hostNetwork: true
       # Only schedule on worker nodes (SONiC devices), NOT on master/control-plane
@@ -30,7 +31,7 @@ spec:
                 operator: DoesNotExist
       containers:
       - name: sonic-change-agent
-        image: sonic-change-agent:dry-run-v4
+        image: sonic-change-agent:debug-test-v1
         imagePullPolicy: Never  # Use local image for testing
         args:
         - --device-name=$(NODE_NAME)
@@ -42,9 +43,9 @@ spec:
             fieldRef:
               fieldPath: spec.nodeName
         - name: DEBUG_MODE
-          value: "false"
-        - name: DRY_RUN
           value: "true"
+        - name: DRY_RUN
+          value: "false"
         resources:
           requests:
             cpu: 10m

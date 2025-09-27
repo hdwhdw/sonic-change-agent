@@ -40,6 +40,17 @@ type Controller struct {
 	dynamicClient   dynamic.Interface
 	informer        cache.SharedIndexInformer
 	operationMutex  sync.Mutex  // Prevents concurrent operations
+
+	// Upgrade state tracking
+	upgradeStateMutex sync.Mutex
+	currentUpgrade    *UpgradeState
+}
+
+// UpgradeState tracks the current upgrade attempt
+type UpgradeState struct {
+	TargetVersion string
+	StartTime     time.Time
+	Phase         string
 }
 
 // NewController creates a new CRD controller
@@ -149,19 +160,6 @@ func (c *Controller) onNetworkDeviceAdd(obj interface{}) {
 		"device", deviceName,
 		"desiredVersion", desiredVersion,
 		"currentVersion", currentVersion)
-
-	// Check if there's a preload operation
-	requestID, _, _ := unstructured.NestedString(u.Object, "spec", "preload", "requestId")
-	if requestID != "" {
-		targetVersion, _, _ := unstructured.NestedString(u.Object, "spec", "preload", "targetVersion")
-		phase, _, _ := unstructured.NestedString(u.Object, "status", "preload", "phase")
-
-		klog.InfoS("📦 Preload operation detected",
-			"device", deviceName,
-			"requestId", requestID,
-			"targetVersion", targetVersion,
-			"phase", phase)
-	}
 }
 
 func (c *Controller) onNetworkDeviceUpdate(oldObj, newObj interface{}) {
@@ -199,23 +197,6 @@ func (c *Controller) onNetworkDeviceUpdate(oldObj, newObj interface{}) {
 		}
 	}
 
-	// Check for new preload operations
-	oldRequestID, _, _ := unstructured.NestedString(oldU.Object, "spec", "preload", "requestId")
-	newRequestID, _, _ := unstructured.NestedString(newU.Object, "spec", "preload", "requestId")
-
-	if oldRequestID != newRequestID {
-		targetVersion, _, _ := unstructured.NestedString(newU.Object, "spec", "preload", "targetVersion")
-		imageURL, _, _ := unstructured.NestedString(newU.Object, "spec", "preload", "imageURL")
-
-		klog.InfoS("🚀 New preload operation requested",
-			"device", deviceName,
-			"requestId", newRequestID,
-			"targetVersion", targetVersion,
-			"imageURL", imageURL)
-
-		// This is where we would start the actual preload process
-		c.handlePreloadOperation(newU)
-	}
 }
 
 func (c *Controller) onNetworkDeviceDelete(obj interface{}) {
@@ -224,52 +205,6 @@ func (c *Controller) onNetworkDeviceDelete(obj interface{}) {
 	klog.InfoS("🔴 NetworkDevice DELETED", "device", deviceName)
 }
 
-// handlePreloadOperation executes a real firmware preload using gNOI System.SetPackage
-func (c *Controller) handlePreloadOperation(u *unstructured.Unstructured) {
-	c.operationMutex.Lock()
-	defer c.operationMutex.Unlock()
-
-	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Minute)
-	defer cancel()
-
-	deviceName := u.GetName()
-	requestID, _, _ := unstructured.NestedString(u.Object, "spec", "preload", "requestId")
-	targetVersion, _, _ := unstructured.NestedString(u.Object, "spec", "preload", "targetVersion")
-	imageURL, _, _ := unstructured.NestedString(u.Object, "spec", "preload", "imageURL")
-	checksum, _, _ := unstructured.NestedString(u.Object, "spec", "preload", "checksum", "md5")
-	downloadPath, _, _ := unstructured.NestedString(u.Object, "spec", "preload", "downloadPath")
-	if downloadPath == "" {
-		downloadPath = "/tmp/sonic-firmware.bin" // Default fallback
-	}
-
-	klog.InfoS("🔧 Starting firmware preload operation",
-		"device", deviceName,
-		"requestId", requestID,
-		"targetVersion", targetVersion,
-		"imageURL", imageURL)
-
-	// Update status to InProgress
-	if err := c.updatePreloadStatus(ctx, "InProgress", 0, "Starting firmware download and preload"); err != nil {
-		klog.ErrorS(err, "Failed to update preload status to InProgress")
-	}
-
-	// Execute the actual preload
-	if err := c.executeSetPackage(ctx, imageURL, targetVersion, checksum, downloadPath); err != nil {
-		klog.ErrorS(err, "Firmware preload failed", "device", deviceName, "requestId", requestID)
-		c.updatePreloadStatus(ctx, "Failed", 0, fmt.Sprintf("Preload failed: %v", err))
-		return
-	}
-
-	// Update status to Succeeded
-	if err := c.updatePreloadStatus(ctx, "Succeeded", 100, "Firmware successfully preloaded"); err != nil {
-		klog.ErrorS(err, "Failed to update preload status to Succeeded")
-	}
-
-	klog.InfoS("✅ Firmware preload completed successfully",
-		"device", deviceName,
-		"requestId", requestID,
-		"targetVersion", targetVersion)
-}
 
 // handleUpgradeOperation executes a firmware upgrade using gNOI System.SetPackage with activate=true
 func (c *Controller) handleUpgradeOperation(u *unstructured.Unstructured) {
@@ -300,6 +235,9 @@ func (c *Controller) handleUpgradeOperation(u *unstructured.Unstructured) {
 		return
 	}
 
+	// Mark the start of upgrade process
+	c.startUpgrade(desiredVersion)
+
 	// For now, construct firmware URL based on version pattern
 	// TODO: This should eventually come from a firmware registry or CRD spec
 	imageURL := fmt.Sprintf("http://10.250.0.1:8888/sonic-vs-%s.bin", desiredVersion)
@@ -308,21 +246,37 @@ func (c *Controller) handleUpgradeOperation(u *unstructured.Unstructured) {
 	klog.InfoS("🔍 Verifying firmware availability", "imageURL", imageURL)
 	downloadPath := "/tmp/sonic-upgrade.bin" // Use different path for upgrades
 
-	klog.InfoS("🔄 Executing firmware upgrade",
+	// PHASE 1: Download and activate firmware (activate=true)
+	klog.InfoS("🚀 PHASE 1: Downloading and activating firmware",
 		"device", deviceName,
 		"imageURL", imageURL,
 		"downloadPath", downloadPath,
 		"activate", true)
 
-	// Execute the upgrade with activate=true
-	if err := c.executeUpgradePackage(ctx, imageURL, desiredVersion, "", downloadPath); err != nil {
-		klog.ErrorS(err, "Firmware upgrade failed", "device", deviceName)
+	if err := c.executeDownloadPackage(ctx, imageURL, desiredVersion, "", downloadPath); err != nil {
+		klog.ErrorS(err, "Firmware download+activate failed", "device", deviceName)
+		// Clear upgrade state on failure
+		c.clearUpgrade()
 		return
 	}
 
-	klog.InfoS("✅ Firmware upgrade completed successfully",
+	klog.InfoS("✅ PHASE 1 COMPLETE: Firmware downloaded and activated successfully",
 		"device", deviceName,
 		"desiredVersion", desiredVersion)
+
+	// CRITICAL: Do NOT complete the upgrade process here!
+	// The upgrade stays "in progress" until the OS version actually changes.
+	// This prevents multiple SetPackage calls for the same upgrade.
+	// The upgrade state will be cleared by reconciliation when versions match.
+
+	klog.InfoS("⏳ Upgrade process remains active - waiting for version change",
+		"device", deviceName,
+		"desiredVersion", desiredVersion)
+
+	// Keep the upgrade marked as in-progress indefinitely
+	// The reconciliation loop will clear this state when:
+	// 1. currentVersion == desiredVersion, OR
+	// 2. A different desiredVersion is requested
 }
 
 // queryOSVersion queries the current OS version via gNOI OS.Verify
@@ -495,6 +449,14 @@ func (c *Controller) checkReconciliation(ctx context.Context, currentVersion str
 			"currentVersion", currentVersion,
 			"desiredVersion", desiredVersion)
 
+		// Check if upgrade is already in progress for this version
+		if c.isUpgradeInProgress(desiredVersion) {
+			klog.InfoS("⏳ Upgrade already in progress - skipping reconciliation",
+				"device", c.deviceName,
+				"targetVersion", desiredVersion)
+			return
+		}
+
 		if isDryRunMode() {
 			klog.InfoS("🏃‍♂️ DRY RUN: Would trigger upgrade reconciliation",
 				"device", c.deviceName,
@@ -505,80 +467,20 @@ func (c *Controller) checkReconciliation(ctx context.Context, currentVersion str
 				"device", c.deviceName,
 				"from", currentVersion,
 				"to", desiredVersion)
-			// TODO: Call actual reconciliation logic here
+
+			// Call actual reconciliation logic
+			c.handleUpgradeOperation(device)
 		}
 	} else {
 		klog.V(2).InfoS("✅ No reconciliation needed - versions match",
 			"device", c.deviceName,
 			"version", currentVersion)
+
+		// Clear any existing upgrade state since versions match
+		c.clearUpgrade()
 	}
 }
 
-// executeSetPackage calls gNOI System.SetPackage to preload firmware (activate=false)
-func (c *Controller) executeSetPackage(ctx context.Context, imageURL, targetVersion, checksum, downloadPath string) error {
-	klog.InfoS("📦 Sending SetPackage request",
-		"imageURL", imageURL,
-		"targetVersion", targetVersion,
-		"activate", false)
-
-	// DEBUG MODE: Return fake success
-	if isDebugMode() {
-		klog.InfoS("🐛 DEBUG MODE: Faking preload success", "targetVersion", targetVersion)
-		time.Sleep(2 * time.Second) // Simulate processing time
-		return nil
-	}
-
-	endpoint := fmt.Sprintf("%s:8080", c.deviceName)
-
-	// Create gRPC connection
-	conn, err := grpc.DialContext(ctx, endpoint,
-		grpc.WithTransportCredentials(insecure.NewCredentials()),
-		grpc.WithBlock(),
-	)
-	if err != nil {
-		return fmt.Errorf("failed to connect to gNOI server %s: %w", endpoint, err)
-	}
-	defer conn.Close()
-
-	// Create System service client
-	client := system.NewSystemClient(conn)
-
-	// Create streaming client
-	stream, err := client.SetPackage(ctx)
-	if err != nil {
-		return fmt.Errorf("failed to create SetPackage stream: %w", err)
-	}
-
-	// Send Package request (first message)
-	packageReq := &system.SetPackageRequest{
-		Request: &system.SetPackageRequest_Package{
-			Package: &system.Package{
-				Filename:       downloadPath, // Destination path on device from CRD
-				Version:        targetVersion,
-				Activate:       false, // Critical: preload only, don't activate
-				RemoteDownload: &common.RemoteDownload{
-					Path:     imageURL, // Source URL to download from
-					Protocol: common.RemoteDownload_HTTP,
-				},
-			},
-		},
-	}
-
-	if err := stream.Send(packageReq); err != nil {
-		return fmt.Errorf("failed to send package request: %w", err)
-	}
-
-	// Close send side and receive response
-	resp, err := stream.CloseAndRecv()
-	if err != nil {
-		return fmt.Errorf("SetPackage operation failed: %w", err)
-	}
-
-	klog.InfoS("✅ SetPackage completed successfully",
-		"response", resp.String())
-
-	return nil
-}
 
 // executeUpgradePackage calls gNOI System.SetPackage to upgrade firmware (activate=true)
 func (c *Controller) executeUpgradePackage(ctx context.Context, imageURL, targetVersion, checksum, downloadPath string) error {
@@ -646,46 +548,132 @@ func (c *Controller) executeUpgradePackage(ctx context.Context, imageURL, target
 	return nil
 }
 
-// updatePreloadStatus updates the preload status in the CRD
-func (c *Controller) updatePreloadStatus(ctx context.Context, phase string, progress int, message string) error {
-	networkDeviceGVR := schema.GroupVersionResource{
-		Group:    "sonic.io",
-		Version:  "v1",
-		Resource: "networkdevices",
+// executeDownloadPackage calls gNOI System.SetPackage to download and activate firmware (activate=true)
+func (c *Controller) executeDownloadPackage(ctx context.Context, imageURL, targetVersion, checksum, downloadPath string) error {
+	klog.InfoS("🚀 Sending SetPackage request for DOWNLOAD+ACTIVATE",
+		"imageURL", imageURL,
+		"targetVersion", targetVersion,
+		"activate", true,
+		"downloadPath", downloadPath)
+
+	// DEBUG MODE: Return fake success
+	if isDebugMode() {
+		klog.InfoS("🐛 DEBUG MODE: Faking download success", "targetVersion", targetVersion)
+		time.Sleep(2 * time.Second) // Simulate processing time
+		return nil
 	}
 
-	// Get current NetworkDevice resource
-	device, err := c.dynamicClient.Resource(networkDeviceGVR).Namespace("default").Get(ctx, c.deviceName, metav1.GetOptions{})
+	endpoint := fmt.Sprintf("%s:8080", c.deviceName)
+
+	// Create gRPC connection
+	conn, err := grpc.DialContext(ctx, endpoint,
+		grpc.WithTransportCredentials(insecure.NewCredentials()),
+		grpc.WithBlock(),
+	)
 	if err != nil {
-		return fmt.Errorf("failed to get NetworkDevice %s: %w", c.deviceName, err)
+		return fmt.Errorf("failed to connect to gNOI server %s: %w", endpoint, err)
 	}
+	defer conn.Close()
 
-	// Update status.preload
-	if device.Object["status"] == nil {
-		device.Object["status"] = make(map[string]interface{})
-	}
-	status := device.Object["status"].(map[string]interface{})
+	// Create System service client
+	client := system.NewSystemClient(conn)
 
-	if status["preload"] == nil {
-		status["preload"] = make(map[string]interface{})
-	}
-	preloadStatus := status["preload"].(map[string]interface{})
-
-	preloadStatus["phase"] = phase
-	preloadStatus["progress"] = progress
-	preloadStatus["message"] = message
-
-	// Update the status subresource
-	_, err = c.dynamicClient.Resource(networkDeviceGVR).Namespace("default").UpdateStatus(ctx, device, metav1.UpdateOptions{})
+	// Create streaming client
+	stream, err := client.SetPackage(ctx)
 	if err != nil {
-		return fmt.Errorf("failed to update NetworkDevice %s preload status: %w", c.deviceName, err)
+		return fmt.Errorf("failed to create SetPackage stream: %w", err)
 	}
 
-	klog.InfoS("📊 Updated preload status",
-		"device", c.deviceName,
-		"phase", phase,
-		"progress", progress,
-		"message", message)
+	// Send Package request (first message) with activate=false for download only
+	packageReq := &system.SetPackageRequest{
+		Request: &system.SetPackageRequest_Package{
+			Package: &system.Package{
+				Filename:       downloadPath, // Destination path on device
+				Version:        targetVersion,
+				Activate:       true, // CRITICAL: Download AND activate firmware
+				RemoteDownload: &common.RemoteDownload{
+					Path:     imageURL, // Source URL to download from
+					Protocol: common.RemoteDownload_HTTP,
+				},
+			},
+		},
+	}
+
+	if err := stream.Send(packageReq); err != nil {
+		return fmt.Errorf("failed to send package request: %w", err)
+	}
+
+	// Close send side and receive response
+	resp, err := stream.CloseAndRecv()
+	if err != nil {
+		return fmt.Errorf("SetPackage download operation failed: %w", err)
+	}
+
+	klog.InfoS("✅ SetPackage DOWNLOAD+ACTIVATE completed successfully", "response", resp.String())
 
 	return nil
 }
+
+// isUpgradeInProgress checks if an upgrade for the target version is already in progress
+func (c *Controller) isUpgradeInProgress(targetVersion string) bool {
+	c.upgradeStateMutex.Lock()
+	defer c.upgradeStateMutex.Unlock()
+
+	if c.currentUpgrade == nil {
+		return false
+	}
+
+	// Check if we're already upgrading to this version
+	if c.currentUpgrade.TargetVersion == targetVersion {
+		klog.InfoS("⏳ Upgrade already in progress",
+			"device", c.deviceName,
+			"targetVersion", targetVersion,
+			"phase", c.currentUpgrade.Phase,
+			"startTime", c.currentUpgrade.StartTime)
+		return true
+	}
+
+	// Different target version requested - clear old upgrade and allow new one
+	if c.currentUpgrade.TargetVersion != targetVersion {
+		klog.InfoS("🔄 New target version requested - clearing previous upgrade",
+			"device", c.deviceName,
+			"oldTarget", c.currentUpgrade.TargetVersion,
+			"newTarget", targetVersion)
+		c.currentUpgrade = nil
+		return false
+	}
+
+	return false
+}
+
+// startUpgrade marks the beginning of an upgrade process
+func (c *Controller) startUpgrade(targetVersion string) {
+	c.upgradeStateMutex.Lock()
+	defer c.upgradeStateMutex.Unlock()
+
+	c.currentUpgrade = &UpgradeState{
+		TargetVersion: targetVersion,
+		StartTime:     time.Now(),
+		Phase:         "download+activate",
+	}
+
+	klog.InfoS("🚀 Starting upgrade process",
+		"device", c.deviceName,
+		"targetVersion", targetVersion,
+		"startTime", c.currentUpgrade.StartTime)
+}
+
+// clearUpgrade clears the upgrade state when upgrade is complete or versions match
+func (c *Controller) clearUpgrade() {
+	c.upgradeStateMutex.Lock()
+	defer c.upgradeStateMutex.Unlock()
+
+	if c.currentUpgrade != nil {
+		klog.InfoS("✅ Clearing upgrade state",
+			"device", c.deviceName,
+			"targetVersion", c.currentUpgrade.TargetVersion,
+			"duration", time.Since(c.currentUpgrade.StartTime))
+		c.currentUpgrade = nil
+	}
+}
+
