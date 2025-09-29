@@ -199,29 +199,11 @@ sonic-change-agent-xxxxx   1/1     Running   0          30s
 
 ### Step 5: Create NetworkDevice with Matching Versions
 
-Create a NetworkDevice with current = desired to establish baseline:
+Apply the baseline NetworkDevice (no upgrade triggered):
 
 ```bash
-# Apply baseline NetworkDevice (no upgrade triggered)
-cat > /tmp/baseline-device.yaml << 'EOF'
----
-apiVersion: sonic.io/v1
-kind: NetworkDevice
-metadata:
-  name: vlab-01
-  namespace: default
-spec:
-  os:
-    osType: SONiC
-    desiredVersion: "SONiC-OS-20250505.03"
-    firmwareURL: "http://10.250.0.1:8888/sonic-vs-20250505.03.bin"
-status:
-  state: Healthy
-  os:
-    currentVersion: "SONiC-OS-20250505.03"
-EOF
-
-NO_PROXY=192.168.49.2 minikube kubectl -- apply -f /tmp/baseline-device.yaml
+# Apply baseline NetworkDevice using the provided manifest
+NO_PROXY=192.168.49.2 minikube kubectl -- apply -f manifests/test-devices.yaml
 
 # Verify no upgrade is triggered - check version alignment
 NO_PROXY=192.168.49.2 minikube kubectl -- get networkdevice vlab-01
@@ -259,26 +241,12 @@ Keep this running to observe the upgrade flow in real-time.
 Update the NetworkDevice to trigger the upgrade:
 
 ```bash
-# Update NetworkDevice with new firmware version and URL
-cat > /tmp/upgrade-device.yaml << 'EOF'
----
-apiVersion: sonic.io/v1
-kind: NetworkDevice
-metadata:
-  name: vlab-01
-  namespace: default
-spec:
-  os:
-    osType: SONiC
-    desiredVersion: "SONiC-OS-20250505.09"
-    firmwareURL: "http://10.250.0.1:8888/sonic-vs-20250505.09.bin"
-status:
-  state: Healthy
-  os:
-    currentVersion: "SONiC-OS-20250505.03"
-EOF
+# Edit the manifest to trigger upgrade
+sed -i 's/desiredVersion: "SONiC-OS-20250505.03"/desiredVersion: "SONiC-OS-20250505.09"/' manifests/test-devices.yaml
+sed -i 's/sonic-vs-20250505.03.bin/sonic-vs-20250505.09.bin/' manifests/test-devices.yaml
 
-NO_PROXY=192.168.49.2 minikube kubectl -- apply -f /tmp/upgrade-device.yaml
+# Apply the updated NetworkDevice
+NO_PROXY=192.168.49.2 minikube kubectl -- apply -f manifests/test-devices.yaml
 
 # Monitor upgrade status and verify version mismatch triggers upgrade
 NO_PROXY=192.168.49.2 minikube kubectl -- get networkdevice vlab-01
@@ -457,8 +425,8 @@ NO_PROXY=192.168.49.2 minikube kubectl -- delete -f manifests/crd.yaml
 docker stop nginx-firmware-server
 docker rm nginx-firmware-server
 
-# Clean temporary files
-rm -f /tmp/baseline-device.yaml /tmp/upgrade-device.yaml
+# Revert manifest changes if desired
+git checkout manifests/test-devices.yaml
 ```
 
 ## 🎯 Expected Results
