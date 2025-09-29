@@ -31,7 +31,7 @@ spec:
                 operator: DoesNotExist
       containers:
       - name: sonic-change-agent
-        image: sonic-change-agent:debug-test-v1
+        image: sonic-change-agent:setpackage-only-v1
         imagePullPolicy: Never  # Use local image for testing
         args:
         - --device-name=$(NODE_NAME)
@@ -43,7 +43,7 @@ spec:
             fieldRef:
               fieldPath: spec.nodeName
         - name: DEBUG_MODE
-          value: "true"
+          value: "false"
         - name: DRY_RUN
           value: "false"
         resources:

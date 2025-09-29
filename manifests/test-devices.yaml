@@ -1,5 +1,7 @@
 ---
 # NetworkDevice for vlab-01 (actual SONiC device)
+# This configuration starts with matching versions (desired = current)
+# to establish a stable baseline before triggering upgrades
 apiVersion: sonic.io/v1
 kind: NetworkDevice
 metadata:
@@ -8,24 +10,9 @@ metadata:
 spec:
   os:
     osType: SONiC
-    desiredVersion: "20250505.03"
+    desiredVersion: "SONiC-OS-20250505.03"
+    firmwareURL: "http://10.250.0.1:8888/sonic-vs-20250505.03.bin"
 status:
   state: Healthy
   os:
-    currentVersion: "202505.39"
-
----
-# NetworkDevice with preload operation for testing
-apiVersion: sonic.io/v1
-kind: NetworkDevice
-metadata:
-  name: vlab-01-preload-test
-  namespace: default
-spec:
-  os:
-    osType: SONiC
-    desiredVersion: "202511.01"
-status:
-  state: Healthy
-  os:
-    currentVersion: "202505.39"
+    currentVersion: "SONiC-OS-20250505.03"

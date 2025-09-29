@@ -238,9 +238,16 @@ func (c *Controller) handleUpgradeOperation(u *unstructured.Unstructured) {
 	// Mark the start of upgrade process
 	c.startUpgrade(desiredVersion)
 
-	// For now, construct firmware URL based on version pattern
-	// TODO: This should eventually come from a firmware registry or CRD spec
-	imageURL := fmt.Sprintf("http://10.250.0.1:8888/sonic-vs-%s.bin", desiredVersion)
+	// Get firmware URL from CRD spec, fall back to constructed URL if not specified
+	firmwareURL, _, _ := unstructured.NestedString(u.Object, "spec", "os", "firmwareURL")
+	var imageURL string
+	if firmwareURL != "" {
+		imageURL = firmwareURL
+		klog.InfoS("🌐 Using firmware URL from CRD spec", "imageURL", imageURL)
+	} else {
+		imageURL = fmt.Sprintf("http://10.250.0.1:8888/sonic-vs-%s.bin", desiredVersion)
+		klog.InfoS("🔧 Using constructed firmware URL", "imageURL", imageURL)
+	}
 
 	// Safety check: verify the target firmware file exists
 	klog.InfoS("🔍 Verifying firmware availability", "imageURL", imageURL)
@@ -264,12 +271,28 @@ func (c *Controller) handleUpgradeOperation(u *unstructured.Unstructured) {
 		"device", deviceName,
 		"desiredVersion", desiredVersion)
 
+	// PHASE 2: Reboot to activate the new firmware
+	klog.InfoS("🔄 PHASE 2: Initiating system reboot to activate firmware",
+		"device", deviceName,
+		"desiredVersion", desiredVersion)
+
+	if err := c.executeSystemReboot(ctx); err != nil {
+		klog.ErrorS(err, "System reboot failed", "device", deviceName)
+		// Clear upgrade state on failure
+		c.clearUpgrade()
+		return
+	}
+
+	klog.InfoS("✅ PHASE 2 COMPLETE: System reboot initiated successfully",
+		"device", deviceName,
+		"desiredVersion", desiredVersion)
+
 	// CRITICAL: Do NOT complete the upgrade process here!
 	// The upgrade stays "in progress" until the OS version actually changes.
 	// This prevents multiple SetPackage calls for the same upgrade.
 	// The upgrade state will be cleared by reconciliation when versions match.
 
-	klog.InfoS("⏳ Upgrade process remains active - waiting for version change",
+	klog.InfoS("⏳ Upgrade process remains active - waiting for version change after reboot",
 		"device", deviceName,
 		"desiredVersion", desiredVersion)
 
@@ -614,6 +637,46 @@ func (c *Controller) executeDownloadPackage(ctx context.Context, imageURL, targe
 	return nil
 }
 
+// executeSystemReboot calls gNOI System.Reboot to reboot the device
+func (c *Controller) executeSystemReboot(ctx context.Context) error {
+	klog.InfoS("🔄 Sending System.Reboot request")
+
+	// DEBUG MODE: Return fake success
+	if isDebugMode() {
+		klog.InfoS("🐛 DEBUG MODE: Faking reboot success")
+		time.Sleep(1 * time.Second) // Simulate processing time
+		return nil
+	}
+
+	// Connect to gRPC server on port 8080
+	conn, err := grpc.DialContext(ctx, "localhost:8080", grpc.WithTransportCredentials(insecure.NewCredentials()))
+	if err != nil {
+		return fmt.Errorf("failed to connect to gNOI server: %w", err)
+	}
+	defer conn.Close()
+
+	// Create System service client
+	client := system.NewSystemClient(conn)
+
+	// Prepare reboot request
+	rebootReq := &system.RebootRequest{
+		Method:  system.RebootMethod_COLD,
+		Delay:   0, // Immediate reboot
+		Message: "SONiC firmware upgrade reboot",
+		Force:   false,
+	}
+
+	// Send reboot request
+	resp, err := client.Reboot(ctx, rebootReq)
+	if err != nil {
+		return fmt.Errorf("System.Reboot operation failed: %w", err)
+	}
+
+	klog.InfoS("✅ System.Reboot completed successfully", "response", resp.String())
+
+	return nil
+}
+
 // isUpgradeInProgress checks if an upgrade for the target version is already in progress
 func (c *Controller) isUpgradeInProgress(targetVersion string) bool {
 	c.upgradeStateMutex.Lock()
@@ -654,7 +717,7 @@ func (c *Controller) startUpgrade(targetVersion string) {
 	c.currentUpgrade = &UpgradeState{
 		TargetVersion: targetVersion,
 		StartTime:     time.Now(),
-		Phase:         "download+activate",
+		Phase:         "download+activate+reboot",
 	}
 
 	klog.InfoS("🚀 Starting upgrade process",

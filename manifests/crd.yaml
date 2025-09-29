@@ -24,6 +24,9 @@ spec:
                   desiredVersion:
                     type: string
                     description: "Target OS version for declarative upgrades"
+                  firmwareURL:
+                    type: string
+                    description: "URL to download the firmware image from"
           status:
             type: object
             properties:
