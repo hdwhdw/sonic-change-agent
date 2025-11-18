@@ -11,9 +11,10 @@
 # Test binary, built with `go test -c`
 *.test
 
-# Code coverage profiles and other test artifacts
-*.out
-coverage.*
+# Build directory - contains all build artifacts
+/build/
+
+# Legacy coverage files (now in build/coverage/)
 *.coverprofile
 profile.cov
 

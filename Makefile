@@ -10,6 +10,12 @@ LDFLAGS=-X github.com/hdwhdw/sonic-change-agent/pkg/version.Version=$(VERSION) \
         -X github.com/hdwhdw/sonic-change-agent/pkg/version.GitCommit=$(GIT_COMMIT) \
         -X github.com/hdwhdw/sonic-change-agent/pkg/version.BuildTime=$(BUILD_TIME)
 
+# Build directories
+BUILD_DIR=build
+BIN_DIR=$(BUILD_DIR)/bin
+COVERAGE_DIR=$(BUILD_DIR)/coverage
+REPORTS_DIR=$(BUILD_DIR)/reports
+
 # Test parameters
 PYTEST_ARGS?=-v
 MINIKUBE_PROFILE=sonic-test
@@ -93,20 +99,22 @@ all: fmt vet unit build
 # Build
 build:
 	@echo "Building $(BINARY_NAME)..."
-	$(GOBUILD) -ldflags "$(LDFLAGS)" -o $(BINARY_NAME) ./cmd/sonic-change-agent
+	@mkdir -p $(BIN_DIR)
+	$(GOBUILD) -ldflags "$(LDFLAGS)" -o $(BIN_DIR)/$(BINARY_NAME) ./cmd/sonic-change-agent
 
 # Testing
 unit:
 	@echo "Running Go unit tests..."
-	$(GOTEST) -v -race -coverprofile=coverage.out ./...
+	@mkdir -p $(COVERAGE_DIR)
+	$(GOTEST) -v -race -coverprofile=$(COVERAGE_DIR)/coverage.out ./...
 
 test: unit test-integration
 	@echo "✅ All tests completed"
 
 coverage: unit
 	@echo "Generating coverage report..."
-	$(GOCMD) tool cover -html=coverage.out -o coverage.html
-	@echo "Coverage report generated: coverage.html"
+	$(GOCMD) tool cover -html=$(COVERAGE_DIR)/coverage.out -o $(COVERAGE_DIR)/coverage.html
+	@echo "Coverage report generated: $(COVERAGE_DIR)/coverage.html"
 
 # Code Quality
 fmt:
@@ -155,8 +163,8 @@ _check-test-prereqs:
 clean:
 	@echo "Cleaning all artifacts..."
 	$(GOCLEAN)
-	rm -f $(BINARY_NAME)
-	rm -f coverage.out coverage.html
+	rm -rf $(BUILD_DIR)
+	rm -f coverage.out coverage.html  # Legacy files
 	-minikube delete --profile $(MINIKUBE_PROFILE) 2>/dev/null || true
 	-docker rmi $(DOCKER_IMAGE):test 2>/dev/null || true
 	rm -rf test/test_logs test/.pytest_cache
