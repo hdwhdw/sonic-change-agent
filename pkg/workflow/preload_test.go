@@ -4,12 +4,12 @@ import (
 	"context"
 	"testing"
 
-	"github.com/hdwhdw/sonic-change-agent/pkg/gnoi"
+	"github.com/hdwhdw/sonic-change-agent/pkg/gnoi/mocks"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 )
 
 func TestPreloadWorkflow_GetName(t *testing.T) {
-	mockClient := gnoi.NewMockClient()
+	mockClient := mocks.NewClient()
 	workflow := NewPreloadWorkflow(mockClient)
 
 	if workflow.GetName() != "preload" {
@@ -18,7 +18,7 @@ func TestPreloadWorkflow_GetName(t *testing.T) {
 }
 
 func TestPreloadWorkflow_Execute(t *testing.T) {
-	mockClient := gnoi.NewMockClient()
+	mockClient := mocks.NewClient()
 	workflow := NewPreloadWorkflow(mockClient)
 
 	// Create a mock device with new CRD structure
@@ -38,11 +38,12 @@ func TestPreloadWorkflow_Execute(t *testing.T) {
 	}
 
 	// Verify TransferToRemote was called
-	if len(mockClient.TransferToRemoteCalls) != 1 {
-		t.Fatalf("Expected 1 TransferToRemote call, got %d", len(mockClient.TransferToRemoteCalls))
+	fileService := mockClient.GetFileService()
+	if fileService.GetTransferToRemoteCallCount() != 1 {
+		t.Fatalf("Expected 1 TransferToRemote call, got %d", fileService.GetTransferToRemoteCallCount())
 	}
 
-	call := mockClient.TransferToRemoteCalls[0]
+	call, _ := fileService.GetLastTransferToRemoteCall()
 	expectedURL := "http://image-repo.example.com/sonic-202505.01-SONiC-Mellanox-2700-ToRRouter-Storage.bin"
 	if call.SourceURL != expectedURL {
 		t.Errorf("Expected sourceURL '%s', got '%s'", expectedURL, call.SourceURL)
@@ -53,7 +54,7 @@ func TestPreloadWorkflow_Execute(t *testing.T) {
 }
 
 func TestPreloadWorkflow_Execute_MissingOSVersion(t *testing.T) {
-	mockClient := gnoi.NewMockClient()
+	mockClient := mocks.NewClient()
 	workflow := NewPreloadWorkflow(mockClient)
 
 	// Create a mock device without osVersion
@@ -72,13 +73,14 @@ func TestPreloadWorkflow_Execute_MissingOSVersion(t *testing.T) {
 	}
 
 	// Verify no transfer was attempted
-	if len(mockClient.TransferToRemoteCalls) != 0 {
-		t.Errorf("Expected 0 TransferToRemote calls, got %d", len(mockClient.TransferToRemoteCalls))
+	fileService := mockClient.GetFileService()
+	if fileService.GetTransferToRemoteCallCount() != 0 {
+		t.Errorf("Expected 0 TransferToRemote calls, got %d", fileService.GetTransferToRemoteCallCount())
 	}
 }
 
 func TestPreloadWorkflow_Execute_EmptyOSVersion(t *testing.T) {
-	mockClient := gnoi.NewMockClient()
+	mockClient := mocks.NewClient()
 	workflow := NewPreloadWorkflow(mockClient)
 
 	// Create a mock device with empty osVersion
@@ -98,7 +100,8 @@ func TestPreloadWorkflow_Execute_EmptyOSVersion(t *testing.T) {
 	}
 
 	// Verify no transfer was attempted
-	if len(mockClient.TransferToRemoteCalls) != 0 {
-		t.Errorf("Expected 0 TransferToRemote calls, got %d", len(mockClient.TransferToRemoteCalls))
+	fileService := mockClient.GetFileService()
+	if fileService.GetTransferToRemoteCallCount() != 0 {
+		t.Errorf("Expected 0 TransferToRemote calls, got %d", fileService.GetTransferToRemoteCallCount())
 	}
 }

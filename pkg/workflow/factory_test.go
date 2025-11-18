@@ -3,11 +3,11 @@ package workflow
 import (
 	"testing"
 
-	"github.com/hdwhdw/sonic-change-agent/pkg/gnoi"
+	"github.com/hdwhdw/sonic-change-agent/pkg/gnoi/mocks"
 )
 
 func TestNewWorkflow_Preload(t *testing.T) {
-	mockClient := gnoi.NewMockClient()
+	mockClient := mocks.NewClient()
 
 	workflow, err := NewWorkflow("preload", mockClient)
 	if err != nil {
@@ -24,7 +24,7 @@ func TestNewWorkflow_Preload(t *testing.T) {
 }
 
 func TestNewWorkflow_OSUpgradePreloadImage(t *testing.T) {
-	mockClient := gnoi.NewMockClient()
+	mockClient := mocks.NewClient()
 
 	workflow, err := NewWorkflow("OSUpgrade-PreloadImage", mockClient)
 	if err != nil {
@@ -41,7 +41,7 @@ func TestNewWorkflow_OSUpgradePreloadImage(t *testing.T) {
 }
 
 func TestNewWorkflow_UnknownType(t *testing.T) {
-	mockClient := gnoi.NewMockClient()
+	mockClient := mocks.NewClient()
 
 	workflow, err := NewWorkflow("unknown", mockClient)
 	if err == nil {

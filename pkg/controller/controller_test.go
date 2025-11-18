@@ -6,12 +6,12 @@ import (
 	"testing"
 	"time"
 
-	"github.com/hdwhdw/sonic-change-agent/pkg/gnoi"
+	"github.com/hdwhdw/sonic-change-agent/pkg/gnoi/mocks"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 )
 
 func TestReconcile_NoReconciliationNeeded_NoOperation(t *testing.T) {
-	mockClient := gnoi.NewMockClient()
+	mockClient := mocks.NewClient()
 
 	// Create controller (we'll call reconcile directly, not through informer)
 	ctrl := &Controller{
@@ -44,16 +44,16 @@ func TestReconcile_NoReconciliationNeeded_NoOperation(t *testing.T) {
 	ctrl.reconcile(obj)
 
 	// Verify no workflow execution was attempted
-	if len(mockClient.TransferToRemoteCalls) != 0 {
-		t.Errorf("Expected 0 TransferToRemote calls, got %d", len(mockClient.TransferToRemoteCalls))
+	if mockClient.GetFileService().GetTransferToRemoteCallCount() != 0 {
+		t.Errorf("Expected 0 TransferToRemote calls, got %d", mockClient.GetFileService().GetTransferToRemoteCallCount())
 	}
 }
 
 func TestReconcile_PreloadImage_Success(t *testing.T) {
-	mockClient := gnoi.NewMockClient()
+	mockClient := mocks.NewClient()
 
 	// Mock successful transfer
-	mockClient.TransferToRemoteFunc = func(ctx context.Context, sourceURL, remotePath string) error {
+	mockClient.GetFileService().TransferToRemoteFunc = func(ctx context.Context, sourceURL, remotePath string) error {
 		return nil
 	}
 
@@ -91,12 +91,13 @@ func TestReconcile_PreloadImage_Success(t *testing.T) {
 	ctrl.reconcile(obj)
 
 	// Verify transfer was attempted
-	if len(mockClient.TransferToRemoteCalls) != 1 {
-		t.Fatalf("Expected 1 TransferToRemote call, got %d", len(mockClient.TransferToRemoteCalls))
+	fileService := mockClient.GetFileService()
+	if fileService.GetTransferToRemoteCallCount() != 1 {
+		t.Fatalf("Expected 1 TransferToRemote call, got %d", fileService.GetTransferToRemoteCallCount())
 	}
 
 	// Verify transfer parameters (constructed URL based on osVersion and firmwareProfile)
-	call := mockClient.TransferToRemoteCalls[0]
+	call, _ := fileService.GetLastTransferToRemoteCall()
 	expectedURL := "http://image-repo.example.com/sonic-202505.01-SONiC-Mellanox-2700-ToRRouter-Storage.bin"
 	if call.SourceURL != expectedURL {
 		t.Errorf("Expected sourceURL '%s', got '%s'", expectedURL, call.SourceURL)
@@ -109,7 +110,7 @@ func TestReconcile_PreloadImage_Success(t *testing.T) {
 }
 
 func TestReconcile_OperationAlreadyCompleted(t *testing.T) {
-	mockClient := gnoi.NewMockClient()
+	mockClient := mocks.NewClient()
 
 	ctrl := &Controller{
 		deviceName: "test-device",
@@ -145,13 +146,13 @@ func TestReconcile_OperationAlreadyCompleted(t *testing.T) {
 	ctrl.reconcile(obj)
 
 	// Verify no transfer was attempted
-	if len(mockClient.TransferToRemoteCalls) != 0 {
-		t.Errorf("Expected 0 TransferToRemote calls, got %d", len(mockClient.TransferToRemoteCalls))
+	if mockClient.GetFileService().GetTransferToRemoteCallCount() != 0 {
+		t.Errorf("Expected 0 TransferToRemote calls, got %d", mockClient.GetFileService().GetTransferToRemoteCallCount())
 	}
 }
 
 func TestReconcile_OperationNotReady(t *testing.T) {
-	mockClient := gnoi.NewMockClient()
+	mockClient := mocks.NewClient()
 
 	ctrl := &Controller{
 		deviceName: "test-device",
@@ -187,16 +188,16 @@ func TestReconcile_OperationNotReady(t *testing.T) {
 	ctrl.reconcile(obj)
 
 	// Verify no transfer was attempted
-	if len(mockClient.TransferToRemoteCalls) != 0 {
-		t.Errorf("Expected 0 TransferToRemote calls, got %d", len(mockClient.TransferToRemoteCalls))
+	if mockClient.GetFileService().GetTransferToRemoteCallCount() != 0 {
+		t.Errorf("Expected 0 TransferToRemote calls, got %d", mockClient.GetFileService().GetTransferToRemoteCallCount())
 	}
 }
 
 func TestReconcile_ConcurrentCalls(t *testing.T) {
-	mockClient := gnoi.NewMockClient()
+	mockClient := mocks.NewClient()
 
 	// Make transfer slow to test mutex
-	mockClient.TransferToRemoteFunc = func(ctx context.Context, sourceURL, remotePath string) error {
+	mockClient.GetFileService().TransferToRemoteFunc = func(ctx context.Context, sourceURL, remotePath string) error {
 		time.Sleep(100 * time.Millisecond)
 		return nil
 	}
@@ -245,16 +246,17 @@ func TestReconcile_ConcurrentCalls(t *testing.T) {
 	<-done
 
 	// Due to mutex, verify no crash occurred and at most 2 calls were made
-	if len(mockClient.TransferToRemoteCalls) > 2 {
-		t.Errorf("Expected at most 2 TransferToRemote calls, got %d", len(mockClient.TransferToRemoteCalls))
+	fileService := mockClient.GetFileService()
+	if fileService.GetTransferToRemoteCallCount() > 2 {
+		t.Errorf("Expected at most 2 TransferToRemote calls, got %d", fileService.GetTransferToRemoteCallCount())
 	}
 }
 
 func TestReconcile_WorkflowFailure(t *testing.T) {
-	mockClient := gnoi.NewMockClient()
+	mockClient := mocks.NewClient()
 
 	// Mock failed transfer
-	mockClient.TransferToRemoteFunc = func(ctx context.Context, sourceURL, remotePath string) error {
+	mockClient.GetFileService().TransferToRemoteFunc = func(ctx context.Context, sourceURL, remotePath string) error {
 		return fmt.Errorf("network error: connection timeout")
 	}
 
@@ -289,8 +291,9 @@ func TestReconcile_WorkflowFailure(t *testing.T) {
 	ctrl.reconcile(obj)
 
 	// Verify transfer was attempted
-	if len(mockClient.TransferToRemoteCalls) != 1 {
-		t.Errorf("Expected 1 TransferToRemote call, got %d", len(mockClient.TransferToRemoteCalls))
+	fileService := mockClient.GetFileService()
+	if fileService.GetTransferToRemoteCallCount() != 1 {
+		t.Errorf("Expected 1 TransferToRemote call, got %d", fileService.GetTransferToRemoteCallCount())
 	}
 
 	// Verify status was updated to failed
@@ -311,7 +314,7 @@ func TestReconcile_WorkflowFailure(t *testing.T) {
 }
 
 func TestReconcile_InvalidObject(t *testing.T) {
-	mockClient := gnoi.NewMockClient()
+	mockClient := mocks.NewClient()
 
 	ctrl := &Controller{
 		deviceName: "test-device",
@@ -322,13 +325,13 @@ func TestReconcile_InvalidObject(t *testing.T) {
 	ctrl.reconcile("not an unstructured object")
 
 	// Should not crash, just return early
-	if len(mockClient.TransferToRemoteCalls) != 0 {
-		t.Errorf("Expected 0 TransferToRemote calls for invalid object, got %d", len(mockClient.TransferToRemoteCalls))
+	if mockClient.GetFileService().GetTransferToRemoteCallCount() != 0 {
+		t.Errorf("Expected 0 TransferToRemote calls for invalid object, got %d", mockClient.GetFileService().GetTransferToRemoteCallCount())
 	}
 }
 
 func TestReconcile_MissingOSVersion(t *testing.T) {
-	mockClient := gnoi.NewMockClient()
+	mockClient := mocks.NewClient()
 
 	ctrl := &Controller{
 		deviceName: "test-device",
@@ -359,8 +362,8 @@ func TestReconcile_MissingOSVersion(t *testing.T) {
 	ctrl.reconcile(obj)
 
 	// Should still attempt workflow, but workflow will fail
-	if len(mockClient.TransferToRemoteCalls) != 0 {
-		t.Errorf("Expected 0 TransferToRemote calls when workflow fails, got %d", len(mockClient.TransferToRemoteCalls))
+	if mockClient.GetFileService().GetTransferToRemoteCallCount() != 0 {
+		t.Errorf("Expected 0 TransferToRemote calls when workflow fails, got %d", mockClient.GetFileService().GetTransferToRemoteCallCount())
 	}
 
 	// Should have failed due to missing osVersion

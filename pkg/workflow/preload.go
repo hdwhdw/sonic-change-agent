@@ -52,7 +52,7 @@ func (w *PreloadWorkflow) Execute(ctx context.Context, device *unstructured.Unst
 		"downloadPath", downloadPath)
 
 	// Execute single step: Transfer file using gNOI file service
-	if err := w.gnoi.TransferToRemote(ctx, imageURL, downloadPath); err != nil {
+	if err := w.gnoi.File().TransferToRemote(ctx, imageURL, downloadPath); err != nil {
 		return fmt.Errorf("failed to transfer file: %w", err)
 	}
 
