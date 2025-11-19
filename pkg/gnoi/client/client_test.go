@@ -1,9 +1,9 @@
-package gnoi
+package client
 
 import (
 	"testing"
 
-	"github.com/hdwhdw/sonic-change-agent/pkg/gnoi/services/file"
+	"github.com/hdwhdw/sonic-change-agent/pkg/gnoi/client/services/file"
 )
 
 func TestGrpcClient_Close_NilConnection(t *testing.T) {

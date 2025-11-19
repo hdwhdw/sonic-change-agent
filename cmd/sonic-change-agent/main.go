@@ -9,7 +9,7 @@ import (
 
 	"github.com/hdwhdw/sonic-change-agent/pkg/config"
 	"github.com/hdwhdw/sonic-change-agent/pkg/controller"
-	"github.com/hdwhdw/sonic-change-agent/pkg/gnoi"
+	"github.com/hdwhdw/sonic-change-agent/pkg/gnoi/client"
 	"github.com/hdwhdw/sonic-change-agent/pkg/version"
 	"k8s.io/client-go/rest"
 	"k8s.io/klog/v2"
@@ -55,7 +55,7 @@ func main() {
 		"dryRun", os.Getenv("DRY_RUN") == "true")
 
 	// Create gNOI client
-	gnoiClient, err := gnoi.NewClient(gnoiConfig.GetGNOIEndpoint())
+	gnoiClient, err := client.NewClient(gnoiConfig.GetGNOIEndpoint())
 	if err != nil {
 		klog.ErrorS(err, "Failed to create gNOI client")
 		os.Exit(1)

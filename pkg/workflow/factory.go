@@ -3,11 +3,11 @@ package workflow
 import (
 	"fmt"
 
-	"github.com/hdwhdw/sonic-change-agent/pkg/gnoi"
+	"github.com/hdwhdw/sonic-change-agent/pkg/gnoi/client"
 )
 
 // NewWorkflow creates a workflow instance based on operation-operationAction type
-func NewWorkflow(workflowType string, gnoiClient gnoi.Client) (Workflow, error) {
+func NewWorkflow(workflowType string, gnoiClient client.Client) (Workflow, error) {
 	switch workflowType {
 	// Legacy support for old workflow types
 	case "preload":

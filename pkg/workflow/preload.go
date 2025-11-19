@@ -4,7 +4,7 @@ import (
 	"context"
 	"fmt"
 
-	"github.com/hdwhdw/sonic-change-agent/pkg/gnoi"
+	"github.com/hdwhdw/sonic-change-agent/pkg/gnoi/client"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/klog/v2"
 )
@@ -15,11 +15,11 @@ const (
 
 // PreloadWorkflow implements the preload workflow using gnoi.file.TransferToRemote
 type PreloadWorkflow struct {
-	gnoi gnoi.Client
+	gnoi client.Client
 }
 
 // NewPreloadWorkflow creates a new preload workflow
-func NewPreloadWorkflow(gnoiClient gnoi.Client) *PreloadWorkflow {
+func NewPreloadWorkflow(gnoiClient client.Client) *PreloadWorkflow {
 	return &PreloadWorkflow{
 		gnoi: gnoiClient,
 	}

@@ -6,7 +6,7 @@ import (
 	"sync"
 	"time"
 
-	"github.com/hdwhdw/sonic-change-agent/pkg/gnoi"
+	"github.com/hdwhdw/sonic-change-agent/pkg/gnoi/client"
 	"github.com/hdwhdw/sonic-change-agent/pkg/workflow"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
@@ -27,7 +27,7 @@ const (
 // Controller manages NetworkDevice CRDs for this node
 type Controller struct {
 	deviceName    string
-	gnoiClient    gnoi.Client
+	gnoiClient    client.Client
 	dynamicClient dynamic.Interface
 	informer      cache.SharedIndexInformer
 
@@ -36,7 +36,7 @@ type Controller struct {
 }
 
 // NewController creates a new controller
-func NewController(deviceName string, gnoiClient gnoi.Client, kubeConfig *rest.Config) (*Controller, error) {
+func NewController(deviceName string, gnoiClient client.Client, kubeConfig *rest.Config) (*Controller, error) {
 	dynamicClient, err := dynamic.NewForConfig(kubeConfig)
 	if err != nil {
 		return nil, fmt.Errorf("failed to create dynamic client: %w", err)
@@ -193,7 +193,7 @@ func (c *Controller) reconcile(obj interface{}) {
 		"operationAction", operationAction,
 		"osVersion", osVersion)
 
-	c.updateOperationStatus(u, "in_progress", "in_progress", fmt.Sprintf("Executing %s %s", operation, operationAction))
+	u = c.updateOperationStatus(u, "in_progress", "in_progress", fmt.Sprintf("Executing %s %s", operation, operationAction))
 
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Minute)
 	defer cancel()
@@ -201,7 +201,7 @@ func (c *Controller) reconcile(obj interface{}) {
 	err = wf.Execute(ctx, u)
 	if err != nil {
 		klog.ErrorS(err, "Workflow execution failed", "operation", operation, "operationAction", operationAction)
-		c.updateOperationStatus(u, "failed", "failed", fmt.Sprintf("Workflow failed: %v", err))
+		u = c.updateOperationStatus(u, "failed", "failed", fmt.Sprintf("Workflow failed: %v", err))
 		return
 	}
 
@@ -210,11 +210,11 @@ func (c *Controller) reconcile(obj interface{}) {
 		"operationAction", operationAction,
 		"osVersion", osVersion)
 
-	c.updateOperationStatus(u, "completed", "completed", "Workflow completed successfully")
+	u = c.updateOperationStatus(u, "completed", "completed", "Workflow completed successfully")
 }
 
 // updateOperationStatus updates the NetworkDevice operation status
-func (c *Controller) updateOperationStatus(u *unstructured.Unstructured, operationState, operationActionState, message string) {
+func (c *Controller) updateOperationStatus(u *unstructured.Unstructured, operationState, operationActionState, message string) *unstructured.Unstructured {
 	// Get current status or create new one
 	currentStatus, _, _ := unstructured.NestedMap(u.Object, "status")
 	if currentStatus == nil {
@@ -245,7 +245,7 @@ func (c *Controller) updateOperationStatus(u *unstructured.Unstructured, operati
 	// Update status subresource
 	if err := unstructured.SetNestedMap(u.Object, currentStatus, "status"); err != nil {
 		klog.ErrorS(err, "Failed to set status")
-		return
+		return u // Return original object on error
 	}
 
 	// Skip actual API call if dynamicClient is nil (for unit tests)
@@ -254,7 +254,7 @@ func (c *Controller) updateOperationStatus(u *unstructured.Unstructured, operati
 			"operationState", operationState,
 			"operationActionState", operationActionState,
 			"message", message)
-		return
+		return u // Return original object in unit test mode
 	}
 
 	gvr := schema.GroupVersionResource{
@@ -263,14 +263,16 @@ func (c *Controller) updateOperationStatus(u *unstructured.Unstructured, operati
 		Resource: "networkdevices",
 	}
 
-	_, err := c.dynamicClient.Resource(gvr).Namespace(u.GetNamespace()).UpdateStatus(context.TODO(), u, metav1.UpdateOptions{})
+	updatedObj, err := c.dynamicClient.Resource(gvr).Namespace(u.GetNamespace()).UpdateStatus(context.TODO(), u, metav1.UpdateOptions{})
 	if err != nil {
 		klog.ErrorS(err, "Failed to update status", "operationState", operationState, "operationActionState", operationActionState, "message", message)
-		return
+		return u // Return original object on API error
 	}
 
 	klog.InfoS("Operation status updated successfully",
 		"operationState", operationState,
 		"operationActionState", operationActionState,
 		"message", message)
+
+	return updatedObj // Return updated object with fresh resourceVersion
 }

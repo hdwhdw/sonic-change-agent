@@ -3,7 +3,7 @@ package workflow
 import (
 	"testing"
 
-	"github.com/hdwhdw/sonic-change-agent/pkg/gnoi/mocks"
+	"github.com/hdwhdw/sonic-change-agent/pkg/gnoi/client/mocks"
 )
 
 func TestNewWorkflow_Preload(t *testing.T) {

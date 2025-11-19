@@ -5,7 +5,7 @@ import (
 	"fmt"
 	"sync"
 
-	"github.com/hdwhdw/sonic-change-agent/pkg/gnoi"
+	"github.com/hdwhdw/sonic-change-agent/pkg/gnoi/client"
 )
 
 // FileService is a mock implementation of FileService
@@ -73,4 +73,4 @@ func (f *FileService) ResetCalls() {
 }
 
 // Ensure FileService implements gnoi.FileService interface
-var _ gnoi.FileService = (*FileService)(nil)
+var _ client.FileService = (*FileService)(nil)

@@ -4,7 +4,7 @@ import (
 	"context"
 	"testing"
 
-	"github.com/hdwhdw/sonic-change-agent/pkg/gnoi/mocks"
+	"github.com/hdwhdw/sonic-change-agent/pkg/gnoi/client/mocks"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 )
 

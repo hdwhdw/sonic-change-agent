@@ -3,7 +3,7 @@ package mocks
 import (
 	"sync"
 
-	"github.com/hdwhdw/sonic-change-agent/pkg/gnoi"
+	"github.com/hdwhdw/sonic-change-agent/pkg/gnoi/client"
 )
 
 // Client is a mock implementation of Client for testing
@@ -33,7 +33,7 @@ func NewClient() *Client {
 }
 
 // File returns the mock File service
-func (m *Client) File() gnoi.FileService {
+func (m *Client) File() client.FileService {
 	return m.fileService
 }
 
@@ -61,4 +61,4 @@ func (m *Client) ResetCalls() {
 }
 
 // Ensure Client implements gnoi.Client interface
-var _ gnoi.Client = (*Client)(nil)
+var _ client.Client = (*Client)(nil)

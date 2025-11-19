@@ -1,10 +1,10 @@
-package gnoi
+package client
 
 import (
 	"context"
 	"fmt"
 
-	"github.com/hdwhdw/sonic-change-agent/pkg/gnoi/services/file"
+	"github.com/hdwhdw/sonic-change-agent/pkg/gnoi/client/services/file"
 	gnoifile "github.com/openconfig/gnoi/file"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/credentials/insecure"
