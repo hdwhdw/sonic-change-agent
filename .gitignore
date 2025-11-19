@@ -28,6 +28,11 @@ go.work.sum
 # env file
 .env
 
+# Test logs and runtime artifacts
+/test_logs/
+/test/.pytest_cache/
+/test/__pycache__/
+
 # Editor/IDE
 # .idea/
 # .vscode/

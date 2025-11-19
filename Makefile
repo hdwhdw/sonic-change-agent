@@ -135,11 +135,21 @@ tidy:
 	$(GOMOD) tidy
 
 # Docker
-docker-build:
-	@echo "Building Docker image..."
-	docker build -t $(DOCKER_IMAGE):$(VERSION) .
+docker-build: docker-build-sonic-change-agent
+	@echo "✅ All Docker images built"
+
+docker-build-sonic-change-agent:
+	@echo "Building sonic-change-agent Docker image..."
+	docker build -f Dockerfile.sonic-change-agent -t $(DOCKER_IMAGE):$(VERSION) .
 	docker tag $(DOCKER_IMAGE):$(VERSION) $(DOCKER_IMAGE):latest
 	@echo "✅ Docker image built: $(DOCKER_IMAGE):$(VERSION)"
+
+# Generic target for future services: make docker-build-SERVICE_NAME
+docker-build-%:
+	@echo "Building $* Docker image..."
+	docker build -f Dockerfile.$* -t $*:$(VERSION) .
+	docker tag $*:$(VERSION) $*:latest
+	@echo "✅ Docker image built: $*:$(VERSION)"
 
 # Integration Testing
 test-integration: _check-test-prereqs
