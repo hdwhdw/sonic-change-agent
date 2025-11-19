@@ -11,9 +11,10 @@
 # Test binary, built with `go test -c`
 *.test
 
-# Code coverage profiles and other test artifacts
-*.out
-coverage.*
+# Build directory - contains all build artifacts
+/build/
+
+# Legacy coverage files (now in build/coverage/)
 *.coverprofile
 profile.cov
 
@@ -26,6 +27,11 @@ go.work.sum
 
 # env file
 .env
+
+# Test logs and runtime artifacts
+/test_logs/
+/test/.pytest_cache/
+/test/__pycache__/
 
 # Editor/IDE
 # .idea/
