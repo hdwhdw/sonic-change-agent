@@ -37,6 +37,7 @@ class TestEnvironment:
     def __init__(self, cluster_name="sonic-test", image_name="sonic-change-agent:test"):
         self.cluster_name = cluster_name
         self.image_name = image_name
+        self.gnoi_image_name = "gnoi-light:test"
         self.created_devices = []
     
     def setup_cluster(self):
@@ -71,17 +72,36 @@ class TestEnvironment:
             raise Exception("Cluster not ready after 2.5 minutes")
     
     def build_image(self, skip_if_exists=False):
-        """Build Docker image for testing."""
-        print(f"\n🐳 Building Docker image: {self.image_name}")
+        """Build Docker images for testing."""
+        print(f"\n🐳 Building Docker images: {self.image_name}, {self.gnoi_image_name}")
         
+        # Get project root: test/lib/environment.py -> project root (2 levels up)
+        project_root = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+        
+        # Build sonic-change-agent image
         if skip_if_exists:
             result = run_cmd(["docker", "inspect", self.image_name])
             if result.returncode == 0:
                 print(f"✅ Using existing Docker image: {self.image_name}")
-                return
+            else:
+                self._build_sonic_agent_image(project_root)
+        else:
+            self._build_sonic_agent_image(project_root)
         
-        # Get project root: test/lib/environment.py -> project root (2 levels up)
-        project_root = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+        # Build gnoi-light image
+        if skip_if_exists:
+            result = run_cmd(["docker", "inspect", self.gnoi_image_name])
+            if result.returncode == 0:
+                print(f"✅ Using existing Docker image: {self.gnoi_image_name}")
+            else:
+                self._build_gnoi_light_image(project_root)
+        else:
+            self._build_gnoi_light_image(project_root)
+        
+        print("✅ Docker images built")
+    
+    def _build_sonic_agent_image(self, project_root):
+        """Build sonic-change-agent Docker image."""
         dockerfile_path = os.path.join(project_root, "Dockerfile.sonic-change-agent")
         
         if not os.path.exists(dockerfile_path):
@@ -89,9 +109,18 @@ class TestEnvironment:
         
         result = run_cmd(["docker", "build", "-f", dockerfile_path, "-t", self.image_name, "."], cwd=project_root)
         if result.returncode != 0:
-            raise Exception(f"Failed to build image: {result.stderr}")
+            raise Exception(f"Failed to build sonic-change-agent image: {result.stderr}")
+    
+    def _build_gnoi_light_image(self, project_root):
+        """Build gnoi-light Docker image."""
+        dockerfile_path = os.path.join(project_root, "Dockerfile.gnoi-light")
         
-        print("✅ Docker image built")
+        if not os.path.exists(dockerfile_path):
+            raise Exception(f"Dockerfile not found at {dockerfile_path}")
+        
+        result = run_cmd(["docker", "build", "-f", dockerfile_path, "-t", self.gnoi_image_name, "."], cwd=project_root)
+        if result.returncode != 0:
+            raise Exception(f"Failed to build gnoi-light image: {result.stderr}")
     
     def deploy_redis(self):
         """Deploy Redis with CONFIG_DB configuration."""
@@ -169,13 +198,17 @@ class TestEnvironment:
     
     def deploy_agent(self):
         """Deploy sonic-change-agent to cluster."""
-        print(f"\n🚀 Deploying sonic-change-agent with image: {self.image_name}")
+        print(f"\n🚀 Deploying sonic-change-agent with images: {self.image_name}, {self.gnoi_image_name}")
         
-        # Load image into cluster
-        print("Loading Docker image into cluster...")
+        # Load images into cluster
+        print("Loading Docker images into cluster...")
         result = run_cmd(["minikube", "image", "load", self.image_name, "--profile", self.cluster_name])
         if result.returncode != 0:
-            raise Exception(f"Failed to load image: {result.stderr}")
+            raise Exception(f"Failed to load sonic-change-agent image: {result.stderr}")
+        
+        result = run_cmd(["minikube", "image", "load", self.gnoi_image_name, "--profile", self.cluster_name])
+        if result.returncode != 0:
+            raise Exception(f"Failed to load gnoi-light image: {result.stderr}")
         
         # Get project root: test/lib/environment.py -> project root (2 levels up)
         project_root = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
@@ -209,8 +242,9 @@ class TestEnvironment:
         with open(daemonset_path, "r") as f:
             daemonset_content = f.read()
         
-        # Update image name
+        # Update image names
         updated_content = daemonset_content.replace("sonic-change-agent:latest", self.image_name)
+        updated_content = updated_content.replace("gnoi-light:test", self.gnoi_image_name)
         
         with tempfile.NamedTemporaryFile(mode='w', suffix='.yaml', delete=False) as f:
             f.write(updated_content)

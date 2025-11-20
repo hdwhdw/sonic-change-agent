@@ -1,23 +1,23 @@
 apiVersion: apps/v1
 kind: DaemonSet
 metadata:
-  name: sonic-change-agent
+  name: gnoi-light
   namespace: default
   labels:
-    app: sonic-change-agent
+    app: gnoi-light
 spec:
   selector:
     matchLabels:
-      app: sonic-change-agent
+      app: gnoi-light
   template:
     metadata:
       labels:
-        app: sonic-change-agent
+        app: gnoi-light
     spec:
-      serviceAccountName: sonic-change-agent
-      # Justification: Required to access SONiC Redis (localhost:6379) and gNOI server (localhost:8080)
+      serviceAccountName: gnoi-light
+      # Justification: Required for gNOI server operations on network devices
       hostNetwork: true # nosemgrep: yaml.kubernetes.security.hostnetwork-pod.hostnetwork-pod
-      # For minikube testing, allow scheduling on control-plane nodes
+      # For minikube testing, allow scheduling on control-plane nodes  
       tolerations:
       - key: node-role.kubernetes.io/control-plane
         operator: Exists
@@ -26,38 +26,12 @@ spec:
         operator: Exists
         effect: NoSchedule
       containers:
-      - name: sonic-change-agent
-        image: sonic-change-agent:test
-        imagePullPolicy: Never
-        env:
-        - name: NODE_NAME
-          valueFrom:
-            fieldRef:
-              fieldPath: spec.nodeName
-        - name: DRY_RUN
-          value: "true"  # Set to "false" for production
-        args:
-        - --device-name=$(NODE_NAME)
-        - -v=2
-        resources:
-          requests:
-            cpu: 100m
-            memory: 128Mi
-          limits:
-            cpu: 500m
-            memory: 512Mi
-        securityContext:
-          allowPrivilegeEscalation: false
-          runAsNonRoot: true
-          runAsUser: 65532
-          capabilities:
-            drop:
-            - ALL
       - name: gnoi-light
         image: gnoi-light:test
         imagePullPolicy: Never
         ports:
         - containerPort: 8080
+          hostPort: 8080
           protocol: TCP
           name: grpc
         env:
@@ -66,6 +40,7 @@ spec:
             fieldRef:
               fieldPath: spec.nodeName
         args:
+        - --address=0.0.0.0:8080
         - --base-dir=/mnt/host
         - -v=2
         volumeMounts:
