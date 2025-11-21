@@ -1,0 +1,178 @@
+package file
+
+import (
+	"context"
+	"fmt"
+	"io"
+	"net/http"
+	"os"
+	"path/filepath"
+	"time"
+
+	"github.com/hdwhdw/sonic-change-agent/pkg/gnoi/server/pathutil"
+	"github.com/hdwhdw/sonic-change-agent/pkg/security/pathvalidator"
+	"github.com/openconfig/gnoi/common"
+	"github.com/openconfig/gnoi/file"
+	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/status"
+	"k8s.io/klog/v2"
+)
+
+// HTTPClient interface for mocking in tests
+type HTTPClient interface {
+	Do(req *http.Request) (*http.Response, error)
+}
+
+// Service implements the gNOI File service
+type Service struct {
+	file.UnimplementedFileServer
+	httpClient     HTTPClient
+	pathTranslator *pathutil.Translator
+}
+
+// NewService creates a new File service
+func NewService(pathTranslator *pathutil.Translator) *Service {
+	return &Service{
+		httpClient: &http.Client{
+			Timeout: 5 * time.Minute,
+		},
+		pathTranslator: pathTranslator,
+	}
+}
+
+// SetHTTPClient sets a custom HTTP client (for testing)
+func (s *Service) SetHTTPClient(client HTTPClient) {
+	s.httpClient = client
+}
+
+// TransferToRemote implements the gNOI File.TransferToRemote RPC
+func (s *Service) TransferToRemote(ctx context.Context, req *file.TransferToRemoteRequest) (*file.TransferToRemoteResponse, error) {
+	klog.InfoS("Received TransferToRemote request",
+		"localPath", req.LocalPath,
+		"remoteURL", req.RemoteDownload.GetPath())
+
+	// Validate request
+	if req.RemoteDownload == nil {
+		return nil, status.Error(codes.InvalidArgument, "remote_download is required")
+	}
+
+	if req.RemoteDownload.Protocol != common.RemoteDownload_HTTP {
+		return nil, status.Errorf(codes.Unimplemented, "only HTTP protocol is supported, got %s", req.RemoteDownload.Protocol.String())
+	}
+
+	remoteURL := req.RemoteDownload.GetPath()
+	if remoteURL == "" {
+		return nil, status.Error(codes.InvalidArgument, "remote URL path is required")
+	}
+
+	localPath := req.LocalPath
+	if localPath == "" {
+		return nil, status.Error(codes.InvalidArgument, "local path is required")
+	}
+
+	// Step 1: Validate the container path for security
+	if err := pathvalidator.ValidatePathForDownload(localPath); err != nil {
+		return nil, status.Errorf(codes.PermissionDenied, "invalid download path: %v", err)
+	}
+
+	// Step 2: Translate container path to host filesystem path
+	hostPath := s.pathTranslator.TranslateToHost(localPath)
+
+	// Step 3: Download to the host path
+	if err := s.downloadFile(ctx, remoteURL, hostPath); err != nil {
+		klog.ErrorS(err, "Failed to download file",
+			"remoteURL", remoteURL,
+			"hostPath", hostPath)
+		return nil, status.Errorf(codes.Internal, "download failed: %v", err)
+	}
+
+	klog.InfoS("File transfer completed successfully",
+		"remoteURL", remoteURL,
+		"hostPath", hostPath)
+
+	return &file.TransferToRemoteResponse{}, nil
+}
+
+// downloadFile downloads a file from URL to local path
+func (s *Service) downloadFile(ctx context.Context, url, destPath string) error {
+	// Maximum file size: 3GB (to accommodate SONiC images ~1.9GB + headroom)
+	const maxFileSize = 3 * 1024 * 1024 * 1024 // 3GB
+
+	// Create HTTP request
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
+	if err != nil {
+		return fmt.Errorf("failed to create request: %w", err)
+	}
+
+	// Execute request
+	resp, err := s.httpClient.Do(req)
+	if err != nil {
+		return fmt.Errorf("HTTP request failed: %w", err)
+	}
+	defer resp.Body.Close()
+
+	// Check response status
+	if resp.StatusCode != http.StatusOK {
+		return fmt.Errorf("HTTP request failed with status: %s", resp.Status)
+	}
+
+	// Check Content-Length header if available for early rejection
+	if resp.ContentLength > maxFileSize {
+		return fmt.Errorf("file too large: %d bytes (max: %d bytes / 3GB)", resp.ContentLength, maxFileSize)
+	}
+
+	// Create destination directory with restrictive permissions
+	destDir := filepath.Dir(destPath)
+	if err := os.MkdirAll(destDir, 0750); err != nil {
+		return fmt.Errorf("failed to create directory %s: %w", destDir, err)
+	}
+
+	// Create destination file
+	destFile, err := os.Create(destPath)
+	if err != nil {
+		return fmt.Errorf("failed to create file %s: %w", destPath, err)
+	}
+	// Move defer after error check to prevent panic on nil file handle
+	defer destFile.Close()
+
+	// Limit download size to prevent DoS attacks
+	limitedReader := io.LimitReader(resp.Body, maxFileSize)
+
+	// Copy data with size limit
+	written, err := io.Copy(destFile, limitedReader)
+	if err != nil {
+		return fmt.Errorf("failed to write file: %w", err)
+	}
+
+	// Check if we hit the size limit
+	if written == maxFileSize {
+		return fmt.Errorf("file exceeds maximum size limit of %d bytes (3GB)", maxFileSize)
+	}
+
+	klog.InfoS("Downloaded file successfully",
+		"url", url,
+		"path", destPath,
+		"size", written)
+
+	return nil
+}
+
+// Get implements the gNOI File.Get RPC (not implemented)
+func (s *Service) Get(req *file.GetRequest, stream file.File_GetServer) error {
+	return status.Error(codes.Unimplemented, "Get is not implemented")
+}
+
+// Put implements the gNOI File.Put RPC (not implemented)
+func (s *Service) Put(stream file.File_PutServer) error {
+	return status.Error(codes.Unimplemented, "Put is not implemented")
+}
+
+// Stat implements the gNOI File.Stat RPC (not implemented)
+func (s *Service) Stat(ctx context.Context, req *file.StatRequest) (*file.StatResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "Stat is not implemented")
+}
+
+// Remove implements the gNOI File.Remove RPC (not implemented)
+func (s *Service) Remove(ctx context.Context, req *file.RemoveRequest) (*file.RemoveResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "Remove is not implemented")
+}
