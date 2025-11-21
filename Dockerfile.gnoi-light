@@ -1,8 +1,5 @@
 # Build stage
-FROM golang:1.21-alpine AS builder
-
-# Install dependencies
-RUN apk add --no-cache git
+FROM golang:1.21-bookworm AS builder
 
 # Set working directory
 WORKDIR /workspace
@@ -19,12 +16,21 @@ COPY cmd/gnoi-light/ cmd/gnoi-light/
 RUN CGO_ENABLED=0 GOOS=linux go build -a -ldflags '-extldflags "-static"' -o gnoi-light cmd/gnoi-light/main.go
 
 # Runtime stage
-FROM gcr.io/distroless/static:nonroot
+FROM publicmirror.azurecr.io/debian:bookworm
+
+# Install minimal dependencies
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    ca-certificates \
+    && rm -rf /var/lib/apt/lists/*
 
 # Copy binary from builder
 COPY --from=builder /workspace/gnoi-light /usr/local/bin/gnoi-light
 
-# Create base directory for file operations
+# Create non-root user and base directory for file operations
+RUN useradd -m -u 65532 -s /bin/false nonroot && \
+    mkdir -p /tmp/gnoi && \
+    chown -R nonroot:nonroot /tmp/gnoi
+
 USER nonroot:nonroot
 WORKDIR /tmp/gnoi
 
