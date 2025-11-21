@@ -194,7 +194,7 @@ func TestService_TransferToRemote_ValidationErrors(t *testing.T) {
 				},
 			},
 			wantCode:    codes.PermissionDenied,
-			wantMessage: "must start with /tmp/ or /var/tmp/",
+			wantMessage: "must be inside /tmp/ or /var/tmp/ directories",
 		},
 	}
 

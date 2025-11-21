@@ -26,7 +26,7 @@ func ValidatePathForDownload(path string) error {
 	// Clean the path and check allowed prefixes
 	cleanPath := filepath.Clean(path)
 	if !strings.HasPrefix(cleanPath, "/tmp/") && !strings.HasPrefix(cleanPath, "/var/tmp/") {
-		return fmt.Errorf("download path must start with /tmp/ or /var/tmp/, got: %s", cleanPath)
+		return fmt.Errorf("download path must be inside /tmp/ or /var/tmp/ directories, got: %s", cleanPath)
 	}
 
 	return nil

@@ -39,4 +39,4 @@ EXPOSE 8080
 
 # Run the server
 ENTRYPOINT ["/usr/local/bin/gnoi-light"]
-CMD ["--address", "0.0.0.0:8080", "--base-dir", "/mnt/host"]
+CMD ["--address", "0.0.0.0:8080", "--host-root-fs", "/mnt/host"]

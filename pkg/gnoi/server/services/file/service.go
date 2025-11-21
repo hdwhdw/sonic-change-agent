@@ -95,6 +95,9 @@ func (s *Service) TransferToRemote(ctx context.Context, req *file.TransferToRemo
 
 // downloadFile downloads a file from URL to local path
 func (s *Service) downloadFile(ctx context.Context, url, destPath string) error {
+	// Maximum file size: 3GB (to accommodate SONiC images ~1.9GB + headroom)
+	const maxFileSize = 3 * 1024 * 1024 * 1024 // 3GB
+
 	// Create HTTP request
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
 	if err != nil {
@@ -113,9 +116,14 @@ func (s *Service) downloadFile(ctx context.Context, url, destPath string) error 
 		return fmt.Errorf("HTTP request failed with status: %s", resp.Status)
 	}
 
-	// Create destination directory
+	// Check Content-Length header if available for early rejection
+	if resp.ContentLength > maxFileSize {
+		return fmt.Errorf("file too large: %d bytes (max: %d bytes / 3GB)", resp.ContentLength, maxFileSize)
+	}
+
+	// Create destination directory with restrictive permissions
 	destDir := filepath.Dir(destPath)
-	if err := os.MkdirAll(destDir, 0755); err != nil {
+	if err := os.MkdirAll(destDir, 0750); err != nil {
 		return fmt.Errorf("failed to create directory %s: %w", destDir, err)
 	}
 
@@ -124,12 +132,21 @@ func (s *Service) downloadFile(ctx context.Context, url, destPath string) error 
 	if err != nil {
 		return fmt.Errorf("failed to create file %s: %w", destPath, err)
 	}
+	// Move defer after error check to prevent panic on nil file handle
 	defer destFile.Close()
 
-	// Copy data
-	written, err := io.Copy(destFile, resp.Body)
+	// Limit download size to prevent DoS attacks
+	limitedReader := io.LimitReader(resp.Body, maxFileSize)
+
+	// Copy data with size limit
+	written, err := io.Copy(destFile, limitedReader)
 	if err != nil {
 		return fmt.Errorf("failed to write file: %w", err)
+	}
+
+	// Check if we hit the size limit
+	if written == maxFileSize {
+		return fmt.Errorf("file exceeds maximum size limit of %d bytes (3GB)", maxFileSize)
 	}
 
 	klog.InfoS("Downloaded file successfully",

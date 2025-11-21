@@ -26,26 +26,26 @@ func TestValidatePathForDownload(t *testing.T) {
 		{"relative with dot", "./test.json", true, "must be absolute"},
 
 		// Invalid: wrong directories
-		{"etc directory", "/etc/passwd", true, "must start with /tmp/ or /var/tmp/"},
-		{"home directory", "/home/user/file.txt", true, "must start with /tmp/ or /var/tmp/"},
-		{"root directory", "/file.txt", true, "must start with /tmp/ or /var/tmp/"},
-		{"usr directory", "/usr/bin/file", true, "must start with /tmp/ or /var/tmp/"},
-		{"var directory", "/var/log/file.txt", true, "must start with /tmp/ or /var/tmp/"},
-		{"opt directory", "/opt/app/file.txt", true, "must start with /tmp/ or /var/tmp/"},
+		{"etc directory", "/etc/passwd", true, "must be inside /tmp/ or /var/tmp/ directories"},
+		{"home directory", "/home/user/file.txt", true, "must be inside /tmp/ or /var/tmp/ directories"},
+		{"root directory", "/file.txt", true, "must be inside /tmp/ or /var/tmp/ directories"},
+		{"usr directory", "/usr/bin/file", true, "must be inside /tmp/ or /var/tmp/ directories"},
+		{"var directory", "/var/log/file.txt", true, "must be inside /tmp/ or /var/tmp/ directories"},
+		{"opt directory", "/opt/app/file.txt", true, "must be inside /tmp/ or /var/tmp/ directories"},
 
 		// Invalid: path traversal attempts (cleaned paths will fail prefix check)
-		{"traversal from tmp", "/tmp/../etc/passwd", true, "must start with /tmp/ or /var/tmp/"},
-		{"traversal from var tmp", "/var/tmp/../etc/passwd", true, "must start with /tmp/ or /var/tmp/"},
-		{"complex traversal", "/tmp/dir/../../../etc/passwd", true, "must start with /tmp/ or /var/tmp/"},
-		{"dot traversal", "/tmp/./../../etc/passwd", true, "must start with /tmp/ or /var/tmp/"},
-		{"nested traversal", "/tmp/a/b/../../../etc/passwd", true, "must start with /tmp/ or /var/tmp/"},
+		{"traversal from tmp", "/tmp/../etc/passwd", true, "must be inside /tmp/ or /var/tmp/ directories"},
+		{"traversal from var tmp", "/var/tmp/../etc/passwd", true, "must be inside /tmp/ or /var/tmp/ directories"},
+		{"complex traversal", "/tmp/dir/../../../etc/passwd", true, "must be inside /tmp/ or /var/tmp/ directories"},
+		{"dot traversal", "/tmp/./../../etc/passwd", true, "must be inside /tmp/ or /var/tmp/ directories"},
+		{"nested traversal", "/tmp/a/b/../../../etc/passwd", true, "must be inside /tmp/ or /var/tmp/ directories"},
 
 		// Edge cases
-		{"tmp root not allowed", "/tmp", true, "must start with /tmp/"},
-		{"var tmp root not allowed", "/var/tmp", true, "must start with /tmp/ or /var/tmp/"},
-		{"similar path tmpdir", "/tmpdir/file.txt", true, "must start with /tmp/ or /var/tmp/"},
-		{"similar path vartmp", "/vartmp/file.txt", true, "must start with /tmp/ or /var/tmp/"},
-		{"tmp prefix but wrong", "/tmp-backup/file.txt", true, "must start with /tmp/ or /var/tmp/"},
+		{"tmp root not allowed", "/tmp", true, "must be inside /tmp/ or /var/tmp/ directories"},
+		{"var tmp root not allowed", "/var/tmp", true, "must be inside /tmp/ or /var/tmp/ directories"},
+		{"similar path tmpdir", "/tmpdir/file.txt", true, "must be inside /tmp/ or /var/tmp/ directories"},
+		{"similar path vartmp", "/vartmp/file.txt", true, "must be inside /tmp/ or /var/tmp/ directories"},
+		{"tmp prefix but wrong", "/tmp-backup/file.txt", true, "must be inside /tmp/ or /var/tmp/ directories"},
 
 		// More edge cases - these should now be valid after cleaning
 		{"double slash", "/tmp//file.txt", false, ""}, // Cleaned to /tmp/file.txt
