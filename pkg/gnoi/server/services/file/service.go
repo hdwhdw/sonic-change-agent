@@ -9,6 +9,7 @@ import (
 	"path/filepath"
 	"time"
 
+	"github.com/hdwhdw/sonic-change-agent/pkg/gnoi/server/pathutil"
 	"github.com/hdwhdw/sonic-change-agent/pkg/security/pathvalidator"
 	"github.com/openconfig/gnoi/common"
 	"github.com/openconfig/gnoi/file"
@@ -25,17 +26,17 @@ type HTTPClient interface {
 // Service implements the gNOI File service
 type Service struct {
 	file.UnimplementedFileServer
-	httpClient HTTPClient
-	baseDir    string // Base directory for file operations
+	httpClient     HTTPClient
+	pathTranslator *pathutil.Translator
 }
 
 // NewService creates a new File service
-func NewService(baseDir string) *Service {
+func NewService(pathTranslator *pathutil.Translator) *Service {
 	return &Service{
 		httpClient: &http.Client{
 			Timeout: 5 * time.Minute,
 		},
-		baseDir: baseDir,
+		pathTranslator: pathTranslator,
 	}
 }
 
@@ -69,27 +70,25 @@ func (s *Service) TransferToRemote(ctx context.Context, req *file.TransferToRemo
 		return nil, status.Error(codes.InvalidArgument, "local path is required")
 	}
 
-	// Validate download path for security
+	// Step 1: Validate the container path for security
 	if err := pathvalidator.ValidatePathForDownload(localPath); err != nil {
 		return nil, status.Errorf(codes.PermissionDenied, "invalid download path: %v", err)
 	}
 
-	cleanPath := filepath.Clean(localPath)
+	// Step 2: Translate container path to host filesystem path
+	hostPath := s.pathTranslator.TranslateToHost(localPath)
 
-	// Join with baseDir to write to mounted volume
-	fullPath := filepath.Join(s.baseDir, cleanPath)
-
-	// Download file
-	if err := s.downloadFile(ctx, remoteURL, fullPath); err != nil {
+	// Step 3: Download to the host path
+	if err := s.downloadFile(ctx, remoteURL, hostPath); err != nil {
 		klog.ErrorS(err, "Failed to download file",
 			"remoteURL", remoteURL,
-			"localPath", fullPath)
+			"hostPath", hostPath)
 		return nil, status.Errorf(codes.Internal, "download failed: %v", err)
 	}
 
 	klog.InfoS("File transfer completed successfully",
 		"remoteURL", remoteURL,
-		"localPath", fullPath)
+		"hostPath", hostPath)
 
 	return &file.TransferToRemoteResponse{}, nil
 }

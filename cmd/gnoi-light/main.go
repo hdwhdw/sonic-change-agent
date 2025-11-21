@@ -16,7 +16,7 @@ func main() {
 	// Command line flags
 	var (
 		fallbackAddress = flag.String("address", "localhost:8080", "Fallback gRPC server address if Redis config unavailable")
-		baseDir         = flag.String("base-dir", "/tmp/gnoi", "Base directory for file operations")
+		hostRootFS      = flag.String("host-root-fs", "/tmp/gnoi", "Mount point of host root filesystem (typically /mnt/host)")
 	)
 
 	// Initialize klog
@@ -43,12 +43,12 @@ func main() {
 	klog.InfoS("Starting gNOI light server",
 		"version", "0.1.0",
 		"address", serverAddress,
-		"baseDir", *baseDir)
+		"hostRootFS", *hostRootFS)
 
 	// Create server
 	cfg := server.Config{
-		Address: serverAddress,
-		BaseDir: *baseDir,
+		Address:    serverAddress,
+		HostRootFS: *hostRootFS,
 	}
 	srv := server.NewServer(cfg)
 

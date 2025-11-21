@@ -6,6 +6,7 @@ import (
 	"net"
 	"sync"
 
+	"github.com/hdwhdw/sonic-change-agent/pkg/gnoi/server/pathutil"
 	"github.com/hdwhdw/sonic-change-agent/pkg/gnoi/server/services/file"
 	gnoi_file "github.com/openconfig/gnoi/file"
 	"google.golang.org/grpc"
@@ -25,8 +26,8 @@ type Server struct {
 
 // Config holds server configuration
 type Config struct {
-	Address string
-	BaseDir string // Base directory for file operations
+	Address    string
+	HostRootFS string // Mount point of host root filesystem
 }
 
 // NewServer creates a new gNOI server
@@ -36,14 +37,17 @@ func NewServer(cfg Config) *Server {
 		cfg.Address = "localhost:8080"
 	}
 
-	// Default base directory
-	if cfg.BaseDir == "" {
-		cfg.BaseDir = "/tmp/gnoi"
+	// Default host root filesystem mount point
+	if cfg.HostRootFS == "" {
+		cfg.HostRootFS = "/tmp/gnoi"
 	}
+
+	// Create path translator
+	pathTranslator := pathutil.NewTranslator(cfg.HostRootFS)
 
 	return &Server{
 		address:    cfg.Address,
-		fileServer: file.NewService(cfg.BaseDir),
+		fileServer: file.NewService(pathTranslator),
 	}
 }
 

@@ -12,8 +12,8 @@ import (
 
 func TestServer_StartStop(t *testing.T) {
 	cfg := Config{
-		Address: "localhost:0", // Use port 0 for automatic assignment
-		BaseDir: t.TempDir(),
+		Address:    "localhost:0", // Use port 0 for automatic assignment
+		HostRootFS: t.TempDir(),
 	}
 
 	server := NewServer(cfg)
@@ -63,8 +63,8 @@ func TestServer_ListenError(t *testing.T) {
 
 	// Try to start server on same port
 	cfg := Config{
-		Address: addr,
-		BaseDir: t.TempDir(),
+		Address:    addr,
+		HostRootFS: t.TempDir(),
 	}
 
 	server := NewServer(cfg)
@@ -90,7 +90,7 @@ func TestServer_DefaultConfig(t *testing.T) {
 
 func TestServer_GetFileService(t *testing.T) {
 	server := NewServer(Config{
-		BaseDir: "/test/dir",
+		HostRootFS: "/test/dir",
 	})
 
 	fs := server.GetFileService()

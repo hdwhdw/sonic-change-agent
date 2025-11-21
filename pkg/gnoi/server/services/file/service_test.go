@@ -9,6 +9,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/hdwhdw/sonic-change-agent/pkg/gnoi/server/pathutil"
 	"github.com/openconfig/gnoi/common"
 	"github.com/openconfig/gnoi/file"
 	"google.golang.org/grpc/codes"
@@ -27,7 +28,8 @@ func (m *MockHTTPClient) Do(req *http.Request) (*http.Response, error) {
 func TestService_TransferToRemote_Success(t *testing.T) {
 	// Create temp directory
 	tempDir := t.TempDir()
-	service := NewService(tempDir)
+	pathTranslator := pathutil.NewTranslator(tempDir)
+	service := NewService(pathTranslator)
 
 	// Mock HTTP client
 	mockContent := "test file content"
@@ -59,8 +61,8 @@ func TestService_TransferToRemote_Success(t *testing.T) {
 		t.Fatal("Expected non-nil response")
 	}
 
-	// Verify file was created
-	expectedPath := "/tmp/test/file.bin"
+	// Verify file was created (should be at hostRootFS + localPath)
+	expectedPath := tempDir + "/tmp/test/file.bin"
 	content, err := os.ReadFile(expectedPath)
 	if err != nil {
 		t.Fatalf("Failed to read created file: %v", err)
@@ -73,7 +75,8 @@ func TestService_TransferToRemote_Success(t *testing.T) {
 
 func TestService_TransferToRemote_HTTPError(t *testing.T) {
 	tempDir := t.TempDir()
-	service := NewService(tempDir)
+	pathTranslator := pathutil.NewTranslator(tempDir)
+	service := NewService(pathTranslator)
 
 	// Mock HTTP client returning 404
 	mockClient := &MockHTTPClient{
@@ -116,7 +119,8 @@ func TestService_TransferToRemote_HTTPError(t *testing.T) {
 
 func TestService_TransferToRemote_ValidationErrors(t *testing.T) {
 	tempDir := t.TempDir()
-	service := NewService(tempDir)
+	pathTranslator := pathutil.NewTranslator(tempDir)
+	service := NewService(pathTranslator)
 
 	tests := []struct {
 		name        string
@@ -218,7 +222,8 @@ func TestService_TransferToRemote_ValidationErrors(t *testing.T) {
 }
 
 func TestService_TransferToRemote_AbsolutePath(t *testing.T) {
-	service := NewService("/tmp")
+	pathTranslator := pathutil.NewTranslator("/tmp")
+	service := NewService(pathTranslator)
 
 	// Mock successful download
 	mockClient := &MockHTTPClient{
@@ -253,7 +258,8 @@ func TestService_TransferToRemote_AbsolutePath(t *testing.T) {
 }
 
 func TestService_UnimplementedRPCs(t *testing.T) {
-	service := NewService("/tmp")
+	pathTranslator := pathutil.NewTranslator("/tmp")
+	service := NewService(pathTranslator)
 
 	// Test Get
 	err := service.Get(&file.GetRequest{}, nil)
