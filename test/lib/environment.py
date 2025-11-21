@@ -244,7 +244,6 @@ class TestEnvironment:
         
         # Update image names
         updated_content = daemonset_content.replace("sonic-change-agent:latest", self.image_name)
-        updated_content = updated_content.replace("gnoi-light:test", self.gnoi_image_name)
         
         with tempfile.NamedTemporaryFile(mode='w', suffix='.yaml', delete=False) as f:
             f.write(updated_content)

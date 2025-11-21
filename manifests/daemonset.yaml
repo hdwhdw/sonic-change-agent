@@ -67,6 +67,7 @@ spec:
               fieldPath: spec.nodeName
         args:
         - --base-dir=/mnt/host
+        - --address=0.0.0.0:8080
         - -v=2
         volumeMounts:
         - name: host-root

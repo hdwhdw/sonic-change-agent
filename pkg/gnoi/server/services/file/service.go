@@ -56,7 +56,7 @@ func (s *Service) TransferToRemote(ctx context.Context, req *file.TransferToRemo
 	}
 
 	if req.RemoteDownload.Protocol != common.RemoteDownload_HTTP {
-		return nil, status.Errorf(codes.Unimplemented, "only HTTP protocol is supported, got %v", req.RemoteDownload.Protocol)
+		return nil, status.Errorf(codes.Unimplemented, "only HTTP protocol is supported, got %s", req.RemoteDownload.Protocol.String())
 	}
 
 	remoteURL := req.RemoteDownload.GetPath()
@@ -76,17 +76,20 @@ func (s *Service) TransferToRemote(ctx context.Context, req *file.TransferToRemo
 
 	cleanPath := filepath.Clean(localPath)
 
+	// Join with baseDir to write to mounted volume
+	fullPath := filepath.Join(s.baseDir, cleanPath)
+
 	// Download file
-	if err := s.downloadFile(ctx, remoteURL, cleanPath); err != nil {
+	if err := s.downloadFile(ctx, remoteURL, fullPath); err != nil {
 		klog.ErrorS(err, "Failed to download file",
 			"remoteURL", remoteURL,
-			"localPath", cleanPath)
+			"localPath", fullPath)
 		return nil, status.Errorf(codes.Internal, "download failed: %v", err)
 	}
 
 	klog.InfoS("File transfer completed successfully",
 		"remoteURL", remoteURL,
-		"localPath", cleanPath)
+		"localPath", fullPath)
 
 	return &file.TransferToRemoteResponse{}, nil
 }

@@ -13,6 +13,11 @@ func ValidatePathForDownload(path string) error {
 		return fmt.Errorf("download path cannot be empty")
 	}
 
+	// Check for null bytes (security vulnerability)
+	if strings.Contains(path, "\x00") {
+		return fmt.Errorf("download path contains null byte")
+	}
+
 	// Must be absolute path
 	if !filepath.IsAbs(path) {
 		return fmt.Errorf("download path must be absolute, got: %s", path)

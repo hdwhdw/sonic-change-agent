@@ -88,15 +88,16 @@ func TestValidatePathForDownload_SecurityScenarios(t *testing.T) {
 		// Wrong directories
 		"/etc/passwd",
 		"/home/user/file.txt",
+
+		// Null byte injection
+		"/tmp/file\x00.txt",
+		"/tmp/normal.txt\x00/etc/passwd",
 	}
 
 	// These should be allowed (no longer attack scenarios)
 	allowedPaths := []string{
 		// URL-encoded (if this gets to us decoded, it's fine)
 		"/tmp/normal-file.txt",
-
-		// Null bytes (Go path handling should be fine)
-		"/tmp/file\x00.txt",
 
 		// Very long paths (should be allowed if in /tmp/)
 		"/tmp/" + strings.Repeat("a", 100) + "/file.txt",
