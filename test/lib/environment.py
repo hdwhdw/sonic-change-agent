@@ -12,6 +12,7 @@ import tempfile
 import yaml
 import json
 from datetime import datetime
+from jinja2 import Template
 
 
 def run_cmd(cmd, capture=True, cwd=None):
@@ -196,9 +197,14 @@ class TestEnvironment:
         finally:
             os.unlink(manifest_path)
     
-    def deploy_agent(self):
-        """Deploy sonic-change-agent to cluster."""
+    def deploy_agent(self, dry_run=True, image_repo_base_url=None):
+        """Deploy sonic-change-agent to cluster with configurable parameters."""
+        dry_run_str = "true" if dry_run else "false"
+        repo_url = image_repo_base_url or "http://localhost:8080/images/"
+        
         print(f"\n🚀 Deploying sonic-change-agent with images: {self.image_name}, {self.gnoi_image_name}")
+        print(f"   DRY_RUN: {dry_run_str}")
+        print(f"   IMAGE_REPO_BASE_URL: {repo_url}")
         
         # Load images into cluster
         print("Loading Docker images into cluster...")
@@ -236,17 +242,22 @@ class TestEnvironment:
         if result.returncode != 0:
             raise Exception(f"Failed to deploy RBAC: {result.stderr}")
         
-        # Deploy DaemonSet with correct image
+        # Deploy DaemonSet using Jinja2 template
         print("Deploying DaemonSet...")
-        daemonset_path = os.path.join(project_root, "manifests", "daemonset.yaml")
-        with open(daemonset_path, "r") as f:
-            daemonset_content = f.read()
+        template_path = os.path.join(project_root, "manifests", "daemonset.yaml.j2")
         
-        # Update image names
-        updated_content = daemonset_content.replace("sonic-change-agent:latest", self.image_name)
+        with open(template_path, "r") as f:
+            template_content = f.read()
+        
+        # Render template with parameters
+        template = Template(template_content)
+        rendered_content = template.render(
+            dry_run=dry_run_str,
+            image_repo_base_url=repo_url
+        )
         
         with tempfile.NamedTemporaryFile(mode='w', suffix='.yaml', delete=False) as f:
-            f.write(updated_content)
+            f.write(rendered_content)
             daemonset_temp_path = f.name
         
         try:

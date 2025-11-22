@@ -26,6 +26,10 @@ def pytest_addoption(parser):
         "--reuse-env", action="store_true", default=False,
         help="Reuse existing test environment instead of creating new one"
     )
+    parser.addoption(
+        "--dry-run", action="store_true", default=True,
+        help="Run tests in DRY_RUN mode (default: True)"
+    )
 
 
 @pytest.fixture(scope="session")
@@ -81,12 +85,18 @@ def redis_deployment(cluster):
 
 
 @pytest.fixture(scope="session")
-def sonic_deployment(cluster, docker_image, redis_deployment):
-    """Deploy sonic-change-agent."""
+def dry_run_mode(request):
+    """Get dry run mode from pytest options."""
+    return request.config.getoption("--dry-run")
+
+
+@pytest.fixture(scope="session")
+def sonic_deployment(cluster, docker_image, redis_deployment, dry_run_mode):
+    """Deploy sonic-change-agent with configurable DRY_RUN mode."""
     global _test_env
     
     try:
-        _test_env.deploy_agent()
+        _test_env.deploy_agent(dry_run=dry_run_mode)
     except Exception as e:
         pytest.fail(f"Failed to deploy sonic-change-agent: {e}")
     
