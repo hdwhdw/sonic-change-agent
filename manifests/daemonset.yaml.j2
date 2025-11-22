@@ -35,9 +35,9 @@ spec:
             fieldRef:
               fieldPath: spec.nodeName
         - name: DRY_RUN
-          value: "true"  # Set to "false" for production
+          value: "{{ dry_run | default('true') }}"
         - name: IMAGE_REPO_BASE_URL
-          value: "http://localhost:8080/images/"  # Production will inject real URL
+          value: "{{ image_repo_base_url | default('http://localhost:8080/images/') }}"
         args:
         - --device-name=$(NODE_NAME)
         - -v=2

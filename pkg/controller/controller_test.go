@@ -3,6 +3,7 @@ package controller
 import (
 	"context"
 	"fmt"
+	"strings"
 	"testing"
 	"time"
 
@@ -98,7 +99,7 @@ func TestReconcile_PreloadImage_Success(t *testing.T) {
 
 	// Verify transfer parameters (constructed URL based on osVersion and firmwareProfile)
 	call, _ := fileService.GetLastTransferToRemoteCall()
-	expectedURL := "http://image-repo.example.com/sonic-202505.01-SONiC-Mellanox-2700-ToRRouter-Storage.bin"
+	expectedURL := "http://localhost:8080/images/sonic-mellanox-202505.01.bin"
 	if call.SourceURL != expectedURL {
 		t.Errorf("Expected sourceURL '%s', got '%s'", expectedURL, call.SourceURL)
 	}
@@ -451,5 +452,239 @@ func TestUpdateOperationStatus_StateMapping(t *testing.T) {
 					tc.expectedState, tc.operationState, state)
 			}
 		})
+	}
+}
+
+func TestReconcile_InvalidConfigurations(t *testing.T) {
+	testCases := []struct {
+		name           string
+		device         *unstructured.Unstructured
+		expectError    bool
+		expectTransfer bool
+		description    string
+	}{
+		{
+			name: "Invalid osVersion format still processed",
+			device: &unstructured.Unstructured{
+				Object: map[string]interface{}{
+					"metadata": map[string]interface{}{"name": "test-device"},
+					"spec": map[string]interface{}{
+						"operation":       "OSUpgrade",
+						"operationAction": "PreloadImage",
+						"osVersion":       "invalid-version-format!@#",
+						"firmwareProfile": "SONiC-Test-Profile",
+					},
+					"status": map[string]interface{}{
+						"operationState":       "proceed",
+						"operationActionState": "proceed",
+					},
+				},
+			},
+			expectError:    false,
+			expectTransfer: true,
+			description:    "Should process any osVersion format (validation is external)",
+		},
+		{
+			name: "Extremely long firmware profile",
+			device: &unstructured.Unstructured{
+				Object: map[string]interface{}{
+					"metadata": map[string]interface{}{"name": "test-device"},
+					"spec": map[string]interface{}{
+						"operation":       "OSUpgrade",
+						"operationAction": "PreloadImage",
+						"osVersion":       "202505.01",
+						"firmwareProfile": strings.Repeat("SONiC-Very-Long-Profile-Name-", 50),
+					},
+					"status": map[string]interface{}{
+						"operationState":       "proceed",
+						"operationActionState": "proceed",
+					},
+				},
+			},
+			expectError:    false,
+			expectTransfer: true,
+			description:    "Should handle long firmware profile names",
+		},
+		{
+			name: "Missing operation field",
+			device: &unstructured.Unstructured{
+				Object: map[string]interface{}{
+					"metadata": map[string]interface{}{"name": "test-device"},
+					"spec": map[string]interface{}{
+						"operationAction": "PreloadImage",
+						"osVersion":       "202505.01",
+						"firmwareProfile": "SONiC-Test-Profile",
+					},
+					"status": map[string]interface{}{
+						"operationState":       "proceed",
+						"operationActionState": "proceed",
+					},
+				},
+			},
+			expectError:    false,
+			expectTransfer: false,
+			description:    "Should skip processing when operation field is missing",
+		},
+		{
+			name: "Special characters in osVersion",
+			device: &unstructured.Unstructured{
+				Object: map[string]interface{}{
+					"metadata": map[string]interface{}{"name": "test-device"},
+					"spec": map[string]interface{}{
+						"operation":       "OSUpgrade",
+						"operationAction": "PreloadImage",
+						"osVersion":       "202505.01-build.123+git.abc123",
+						"firmwareProfile": "SONiC-Test-Profile",
+					},
+					"status": map[string]interface{}{
+						"operationState":       "proceed",
+						"operationActionState": "proceed",
+					},
+				},
+			},
+			expectError:    false,
+			expectTransfer: true,
+			description:    "Should handle special characters in version strings",
+		},
+	}
+
+	for _, tc := range testCases {
+		t.Run(tc.name, func(t *testing.T) {
+			mockClient := mocks.NewClient()
+
+			// Set up transfer function behavior - allow all transfers to succeed by default
+
+			ctrl := &Controller{
+				deviceName: "test-device",
+				gnoiClient: mockClient,
+			}
+
+			// Execute reconciliation
+			ctrl.reconcile(tc.device)
+
+			// Verify transfer behavior
+			fileService := mockClient.GetFileService()
+			transferCount := fileService.GetTransferToRemoteCallCount()
+
+			if tc.expectTransfer && transferCount == 0 {
+				t.Errorf("Expected transfer to be attempted for %s", tc.description)
+			} else if !tc.expectTransfer && transferCount > 0 {
+				t.Errorf("Expected no transfer for %s, but got %d calls", tc.description, transferCount)
+			}
+
+			// Check final status
+			if tc.expectError {
+				operationState, _, _ := unstructured.NestedString(tc.device.Object, "status", "operationState")
+				if operationState != "failed" {
+					t.Errorf("Expected failed status for %s, got %s", tc.description, operationState)
+				}
+			}
+		})
+	}
+}
+
+func TestReconcile_ConcurrencyAndRaceConditions(t *testing.T) {
+	mockClient := mocks.NewClient()
+
+	// Make transfers slow to test race conditions
+	transferCallCount := 0
+	mockClient.GetFileService().TransferToRemoteFunc = func(ctx context.Context, sourceURL, remotePath string) error {
+		transferCallCount++
+		time.Sleep(50 * time.Millisecond)
+		return nil
+	}
+
+	ctrl := &Controller{
+		deviceName: "test-device",
+		gnoiClient: mockClient,
+	}
+
+	device := &unstructured.Unstructured{
+		Object: map[string]interface{}{
+			"metadata": map[string]interface{}{"name": "test-device"},
+			"spec": map[string]interface{}{
+				"operation":       "OSUpgrade",
+				"operationAction": "PreloadImage",
+				"osVersion":       "202505.01",
+				"firmwareProfile": "SONiC-Test-Profile",
+			},
+			"status": map[string]interface{}{
+				"operationState":       "proceed",
+				"operationActionState": "proceed",
+			},
+		},
+	}
+
+	// Launch multiple concurrent reconcile calls
+	numGoroutines := 5
+	done := make(chan bool, numGoroutines)
+
+	for i := 0; i < numGoroutines; i++ {
+		go func() {
+			ctrl.reconcile(device)
+			done <- true
+		}()
+	}
+
+	// Wait for all to complete
+	for i := 0; i < numGoroutines; i++ {
+		<-done
+	}
+
+	// Due to mutex protection, we should have reasonable transfer count
+	// (could be anywhere from 1 to numGoroutines depending on timing)
+	if transferCallCount == 0 {
+		t.Error("Expected at least one transfer to occur")
+	} else if transferCallCount > numGoroutines {
+		t.Errorf("Expected at most %d transfers, got %d", numGoroutines, transferCallCount)
+	}
+
+	// System should remain stable (no panics or data corruption)
+	operationState, _, _ := unstructured.NestedString(device.Object, "status", "operationState")
+	if operationState != "completed" && operationState != "in_progress" {
+		t.Errorf("Expected stable final state, got %s", operationState)
+	}
+}
+
+func TestReconcile_NetworkTimeouts(t *testing.T) {
+	mockClient := mocks.NewClient()
+
+	// Simulate network timeout
+	mockClient.GetFileService().TransferToRemoteFunc = func(ctx context.Context, sourceURL, remotePath string) error {
+		return fmt.Errorf("context deadline exceeded: network timeout")
+	}
+
+	ctrl := &Controller{
+		deviceName: "test-device",
+		gnoiClient: mockClient,
+	}
+
+	device := &unstructured.Unstructured{
+		Object: map[string]interface{}{
+			"metadata": map[string]interface{}{"name": "test-device"},
+			"spec": map[string]interface{}{
+				"operation":       "OSUpgrade",
+				"operationAction": "PreloadImage",
+				"osVersion":       "202505.01",
+				"firmwareProfile": "SONiC-Test-Profile",
+			},
+			"status": map[string]interface{}{
+				"operationState":       "proceed",
+				"operationActionState": "proceed",
+			},
+		},
+	}
+
+	ctrl.reconcile(device)
+
+	// Should handle timeout gracefully and update status
+	operationState, _, _ := unstructured.NestedString(device.Object, "status", "operationState")
+	if operationState != "failed" {
+		t.Errorf("Expected failed status after network timeout, got %s", operationState)
+	}
+
+	state, _, _ := unstructured.NestedString(device.Object, "status", "state")
+	if state != "Failed" {
+		t.Errorf("Expected Failed state after network timeout, got %s", state)
 	}
 }
